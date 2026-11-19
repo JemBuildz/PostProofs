@@ -1,0 +1,13 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Deny all direct client reads and writes.
+    // Creator uploads go through POST /api/campaigns/:id/images (Firebase ID token + ownership verified)
+    // and campaign-scoped client reads go through GET /api/review/:token/images/:imageId
+    // so revoking a review link immediately cuts off image access and clients only view images
+    // belonging to the exact campaign shared with them.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,200 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default deny all access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ==================== GLOBAL PRIMITIVES ====================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidToken(token) {
+      return token is string && token.size() >= 24 && token.size() <= 64 && token.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidChannel(channel) {
+      return channel is string && channel.size() >= 1 && channel.size() <= 20 &&
+        channel in ['Instagram', 'LinkedIn', 'X', 'TikTok', 'Facebook', 'Threads', 'YouTube'];
+    }
+
+    function isValidDateString(val) {
+      return val is string && val.size() == 10 && val.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function isValidPostStatus(status) {
+      return status is string && status.size() >= 8 && status.size() <= 17 &&
+        status in ['in_review', 'approved', 'changes_requested'];
+    }
+
+    // ==================== VALIDATION BLUEPRINTS ====================
+    function isValidPost(data) {
+      return data.keys().hasAll([
+          'campaignId', 'creatorId', 'reviewToken', 'revoked', 'title', 'caption', 'channel', 'scheduledDate', 'imageUrl', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'campaignId', 'creatorId', 'reviewToken', 'revoked', 'title', 'caption', 'channel', 'scheduledDate', 'imageUrl', 'imageId', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.campaignId) &&
+        isValidId(data.creatorId) &&
+        isValidToken(data.reviewToken) &&
+        data.revoked is bool &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+        data.caption is string && data.caption.size() >= 1 && data.caption.size() <= 2200 &&
+        isValidChannel(data.channel) &&
+        isValidDateString(data.scheduledDate) &&
+        data.imageUrl is string && data.imageUrl.size() >= 1 && data.imageUrl.size() <= 2000 &&
+        (!('imageId' in data) || (data.imageId is string && data.imageId.size() <= 128)) &&
+        isValidPostStatus(data.status) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasAll([
+          'campaignId', 'creatorId', 'reviewToken', 'postId', 'revoked', 'authorName', 'authorRole', 'body', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'campaignId', 'creatorId', 'reviewToken', 'postId', 'revoked', 'authorName', 'authorRole', 'body', 'createdAt'
+        ]) &&
+        isValidId(data.campaignId) &&
+        isValidId(data.creatorId) &&
+        isValidToken(data.reviewToken) &&
+        isValidId(data.postId) &&
+        data.revoked is bool &&
+        data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80 &&
+        data.authorRole is string && data.authorRole.size() >= 6 && data.authorRole.size() <= 7 &&
+        data.authorRole in ['client', 'creator'] &&
+        data.body is string && data.body.size() >= 1 && data.body.size() <= 1500 &&
+        data.createdAt is timestamp;
+    }
+
+    // ==================== SERVER-WRITTEN BILLING & STRIPE TABLES ====================
+    match /billing/{userId} {
+      // Creator may read only their own server-written billing record; all client writes forbidden
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
+
+    match /stripeCustomers/{stripeCustomerId} {
+      allow read, write: if false;
+    }
+
+    match /stripeEvents/{eventId} {
+      allow read, write: if false;
+    }
+
+    // ==================== CAMPAIGNS (CREATOR READ-ONLY; SERVER-ENFORCED WRITES) ====================
+    match /campaigns/{campaignId} {
+      allow get: if isSignedIn() && isValidId(campaignId) && existing().creatorId == request.auth.uid;
+      allow list: if isSignedIn() && existing().creatorId == request.auth.uid;
+
+      // All campaign writes are routed through Express + Firebase Admin SDK to enforce plan quotas
+      allow create, update, delete: if false;
+
+      match /images/{imageId} {
+        allow read, write: if false;
+      }
+    }
+
+    // ==================== PRIVATE REVOCABLE REVIEW LINKS ====================
+    match /reviewLinks/{reviewToken} {
+      // Never allow enumerating private review tokens
+      allow list: if false;
+
+      allow get: if isValidToken(reviewToken) && (
+        existing().revoked == false ||
+        (isSignedIn() && existing().creatorId == request.auth.uid)
+      );
+
+      // Link creation, revocation, and rotation are enforced server-side via Admin SDK
+      allow create, update, delete: if false;
+
+      // ==================== POST PROOFS UNDER REVIEW LINK ====================
+      match /posts/{postId} {
+        allow get: if isValidToken(reviewToken) && isValidId(postId) && (
+          (isSignedIn() && existing().creatorId == request.auth.uid) ||
+          (
+            existing().reviewToken == reviewToken &&
+            existing().revoked == false &&
+            get(/databases/$(database)/documents/reviewLinks/$(reviewToken)).data.revoked == false
+          )
+        );
+
+        // Zero get() inside allow list: enforces owner UID or exact path token + non-revoked post flag
+        allow list: if isValidToken(reviewToken) && (
+          (isSignedIn() && existing().creatorId == request.auth.uid) ||
+          (existing().reviewToken == reviewToken && existing().revoked == false)
+        );
+
+        // Post creation and deletion are enforced server-side so plan post quotas cannot be bypassed
+        allow create, delete: if false;
+
+        // Tier 2 (Client with active, non-revoked review link): Approve or request changes ONLY
+        allow update: if isValidPost(incoming()) &&
+          isValidToken(reviewToken) &&
+          isValidId(postId) &&
+          existing().revoked == false &&
+          incoming().revoked == false &&
+          incoming().campaignId == existing().campaignId &&
+          incoming().creatorId == existing().creatorId &&
+          incoming().reviewToken == existing().reviewToken &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+          incoming().status in ['approved', 'changes_requested'] &&
+          get(/databases/$(database)/documents/reviewLinks/$(reviewToken)).data.revoked == false;
+
+        // ==================== POST COMMENTS ====================
+        match /comments/{commentId} {
+          allow get: if isValidToken(reviewToken) && isValidId(postId) && isValidId(commentId) && (
+            (isSignedIn() && existing().creatorId == request.auth.uid) ||
+            (
+              existing().reviewToken == reviewToken &&
+              existing().revoked == false &&
+              get(/databases/$(database)/documents/reviewLinks/$(reviewToken)).data.revoked == false
+            )
+          );
+
+          // Zero get() inside allow list
+          allow list: if isValidToken(reviewToken) && isValidId(postId) && (
+            (isSignedIn() && existing().creatorId == request.auth.uid) ||
+            (existing().reviewToken == reviewToken && existing().revoked == false)
+          );
+
+          // Clients with an active review link may append client comments; creator replies go through Express
+          allow create: if isValidToken(reviewToken) &&
+            isValidId(postId) &&
+            isValidId(commentId) &&
+            isValidComment(incoming()) &&
+            incoming().reviewToken == reviewToken &&
+            incoming().postId == postId &&
+            incoming().revoked == false &&
+            incoming().authorRole == 'client' &&
+            incoming().createdAt == request.time &&
+            exists(/databases/$(database)/documents/reviewLinks/$(reviewToken)/posts/$(postId)) &&
+            get(/databases/$(database)/documents/reviewLinks/$(reviewToken)).data.revoked == false &&
+            get(/databases/$(database)/documents/reviewLinks/$(reviewToken)).data.campaignId == incoming().campaignId &&
+            get(/databases/$(database)/documents/reviewLinks/$(reviewToken)).data.creatorId == incoming().creatorId;
+
+          allow update, delete: if false;
+        }
+      }
+    }
+  }
+}

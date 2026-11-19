@@ -1,0 +1,9 @@
+{
+  "firestore": {
+    "database": "ai-studio-postproof-c08b0d6c-980d-489b-a651-5ba3244e59b5",
+    "rules": "firestore.rules"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  }
+}

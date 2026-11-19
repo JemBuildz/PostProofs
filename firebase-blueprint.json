@@ -1,0 +1,423 @@
+{
+  "entities": {
+    "BillingRecord": {
+      "title": "BillingRecord",
+      "description": "Server-written Stripe subscription entitlement record keyed by canonical Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Canonical Firebase Auth UID."
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 254,
+          "description": "Creator email associated with Stripe customer."
+        },
+        "stripeCustomerId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Stripe Customer ID (cus_...) in test mode."
+        },
+        "stripeSubscriptionId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Stripe Subscription ID (sub_...) in test mode."
+        },
+        "plan": {
+          "type": "string",
+          "enum": ["free", "solo", "studio"],
+          "description": "Active subscription tier enforced server-side."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["inactive", "active", "trialing", "past_due", "canceled", "unpaid"],
+          "description": "Current Stripe subscription status synced from verified webhooks."
+        },
+        "currentPeriodEnd": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of current billing period end."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last billing update."
+        }
+      },
+      "required": ["userId", "plan", "status", "updatedAt"]
+    },
+    "StripeCustomerMap": {
+      "title": "StripeCustomerMap",
+      "description": "Server-only mapping from Stripe Customer ID to canonical Firebase UID for webhook resolution.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 254
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "updatedAt"]
+    },
+    "StripeWebhookEvent": {
+      "title": "StripeWebhookEvent",
+      "description": "Server-only idempotency record for processed Stripe webhook event IDs.",
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "processedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["eventId", "type", "processedAt"]
+    },
+    "Campaign": {
+      "title": "Campaign",
+      "description": "A creator-owned social media approval campaign created server-side with plan quota enforcement.",
+      "type": "object",
+      "properties": {
+        "creatorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the creator who owns this campaign."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Campaign title shown to creator and client."
+        },
+        "clientName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Client or brand name reviewing this campaign."
+        },
+        "activeReviewToken": {
+          "type": "string",
+          "minLength": 24,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Current high-entropy review token pointing to reviewLinks/{reviewToken}."
+        },
+        "reviewLinkRevoked": {
+          "type": "boolean",
+          "description": "Whether the current review link has been revoked by the creator."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the campaign was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the campaign was last updated."
+        }
+      },
+      "required": [
+        "creatorId",
+        "name",
+        "clientName",
+        "activeReviewToken",
+        "reviewLinkRevoked",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CampaignImage": {
+      "title": "CampaignImage",
+      "description": "Server-only metadata mapping an uploaded post image to its owning campaign and Firebase Storage object path.",
+      "type": "object",
+      "properties": {
+        "campaignId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "creatorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "storagePath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "contentType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5242880,
+          "description": "Byte size of the stored image copy in Firebase Storage for per-plan storage limit enforcement."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["campaignId", "creatorId", "storagePath", "contentType", "createdAt"]
+    },
+    "ReviewLink": {
+      "title": "ReviewLink",
+      "description": "Token-keyed parent gate document enabling private revocable client access to a single campaign.",
+      "type": "object",
+      "properties": {
+        "campaignId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "creatorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "campaignName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "clientName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "revoked": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "campaignId",
+        "creatorId",
+        "campaignName",
+        "clientName",
+        "revoked",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Post": {
+      "title": "Post",
+      "description": "A manually entered social media post proof within a shared campaign review link, created server-side with plan quota enforcement.",
+      "type": "object",
+      "properties": {
+        "campaignId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "creatorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "reviewToken": {
+          "type": "string",
+          "minLength": 24,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "revoked": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "caption": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2200
+        },
+        "channel": {
+          "type": "string",
+          "enum": ["Instagram", "LinkedIn", "X", "TikTok", "Facebook", "Threads", "YouTube"]
+        },
+        "scheduledDate": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "imageUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "imageId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "status": {
+          "type": "string",
+          "enum": ["in_review", "approved", "changes_requested"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "campaignId",
+        "creatorId",
+        "reviewToken",
+        "revoked",
+        "title",
+        "caption",
+        "channel",
+        "scheduledDate",
+        "imageUrl",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Client or creator feedback comment attached to a specific post proof.",
+      "type": "object",
+      "properties": {
+        "campaignId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "creatorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "reviewToken": {
+          "type": "string",
+          "minLength": 24,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "postId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "revoked": {
+          "type": "boolean"
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "authorRole": {
+          "type": "string",
+          "enum": ["client", "creator"]
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "campaignId",
+        "creatorId",
+        "reviewToken",
+        "postId",
+        "revoked",
+        "authorName",
+        "authorRole",
+        "body",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/billing/{userId}": {
+      "schema": { "$ref": "#/entities/BillingRecord" },
+      "description": "Server-written subscription status and plan keyed by Firebase UID. Readable only by the owner; client writes forbidden."
+    },
+    "/stripeCustomers/{stripeCustomerId}": {
+      "schema": { "$ref": "#/entities/StripeCustomerMap" },
+      "description": "Server-only lookup table mapping Stripe customer IDs to Firebase UIDs."
+    },
+    "/stripeEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/StripeWebhookEvent" },
+      "description": "Server-only Stripe webhook idempotency log."
+    },
+    "/campaigns/{campaignId}": {
+      "schema": { "$ref": "#/entities/Campaign" },
+      "description": "Creator-owned campaigns. Client reads restricted to owner; all writes enforced server-side via Express + Firebase Admin SDK."
+    },
+    "/campaigns/{campaignId}/images/{imageId}": {
+      "schema": { "$ref": "#/entities/CampaignImage" },
+      "description": "Server-only image metadata linking uploaded Storage objects strictly to their owning campaign."
+    },
+    "/reviewLinks/{reviewToken}": {
+      "schema": { "$ref": "#/entities/ReviewLink" },
+      "description": "Token-keyed client review gate documents. Non-enumerable; client writes forbidden; readable by clients only when revoked == false."
+    },
+    "/reviewLinks/{reviewToken}/posts/{postId}": {
+      "schema": { "$ref": "#/entities/Post" },
+      "description": "Post proofs scoped to a single review link. Creation/deletion server-only for quota enforcement; clients may read and update only status + updatedAt when active."
+    },
+    "/reviewLinks/{reviewToken}/posts/{postId}/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/Comment" },
+      "description": "Feedback comments on a specific post proof. Clients may read and append client comments when the review link is active."
+    }
+  }
+}
