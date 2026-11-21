@@ -2,8 +2,12 @@ import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 import Stripe from 'stripe';
-import { verifyFirebaseIdToken } from './firebaseAdmin.ts';
-import type { VerifiedFirebaseUser, VerifyIdTokenFn } from './firebaseAdmin.ts';
+import { deleteFirebaseAuthUser, verifyFirebaseIdToken } from './firebaseAdmin.ts';
+import type {
+  DeleteAuthUserFn,
+  VerifiedFirebaseUser,
+  VerifyIdTokenFn,
+} from './firebaseAdmin.ts';
 import { FirestorePostProofStore } from './firestoreStore.ts';
 import {
   ALLOWED_CHANNELS,
@@ -47,6 +51,7 @@ interface AuthenticatedRequest extends Request {
 export interface CreateAppOptions {
   store?: PostProofStore;
   verifyIdToken?: VerifyIdTokenFn;
+  deleteAuthUser?: DeleteAuthUserFn;
   stripeConfig?: StripeConfig;
   stripeClient?: Stripe | null;
   strictBillingGate?: boolean;
@@ -137,6 +142,7 @@ export function createApp(options: CreateAppOptions = {}): {
 } {
   const store = options.store ?? new FirestorePostProofStore();
   const verifyIdToken = options.verifyIdToken ?? verifyFirebaseIdToken;
+  const deleteAuthUser = options.deleteAuthUser ?? deleteFirebaseAuthUser;
   const fetchExternalImage = options.fetchExternalImage ?? fetchSafeExternalImage;
   const stripeConfig = options.stripeConfig ?? loadStripeConfig(process.env);
   if (stripeConfig.secretKey) {
@@ -151,7 +157,17 @@ export function createApp(options: CreateAppOptions = {}): {
     options.strictBillingGate ?? process.env.BILLING_STRICT_GATE === 'true';
 
   const app = express();
+  app.disable('x-powered-by');
   app.set('trust proxy', 1);
+
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    next();
+  });
 
   // Stripe Webhook MUST receive raw JSON body BEFORE express.json()
   app.post(
@@ -212,6 +228,11 @@ export function createApp(options: CreateAppOptions = {}): {
         cb(new Error('Only PNG, JPEG, WEBP, and GIF images are supported.'));
       }
     },
+  });
+
+  app.get('/api/health', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({ ok: true, status: 'healthy' });
   });
 
   // Explicitly block legacy unauthenticated upload endpoint (all methods)
@@ -406,6 +427,63 @@ export function createApp(options: CreateAppOptions = {}): {
     }
   );
 
+  // Read-only Checkout Session check: inspects a test-mode cs_test_* session owned by the
+  // signed-in Firebase user without ever modifying subscription entitlements (webhooks remain
+  // the sole source of truth for plan activation).
+  app.get(
+    '/api/billing/checkout-session',
+    requireFirebaseAuth,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const user = req.firebaseUser!;
+      const rawSessionId =
+        typeof req.query.session_id === 'string' ? req.query.session_id.trim() : '';
+
+      if (!rawSessionId || !/^cs_test_[A-Za-z0-9_]+$/.test(rawSessionId)) {
+        res.status(400).json({
+          verified: false,
+          error: 'Missing or invalid test-mode Checkout Session ID.',
+          code: 'INVALID_SESSION_ID',
+        });
+        return;
+      }
+
+      if (!stripe) {
+        res.status(503).json({
+          verified: false,
+          error: 'Stripe test mode is not configured on the server.',
+          code: 'STRIPE_NOT_CONFIGURED',
+        });
+        return;
+      }
+
+      try {
+        const session = await stripe.checkout.sessions.retrieve(rawSessionId);
+        const ownerUid = session.client_reference_id || session.metadata?.userId || null;
+        if (!ownerUid || ownerUid !== user.uid) {
+          res.status(403).json({
+            verified: false,
+            error: 'Checkout Session does not belong to the signed-in account.',
+            code: 'SESSION_USER_MISMATCH',
+          });
+          return;
+        }
+
+        res.json({
+          verified: true,
+          sessionId: session.id,
+          status: session.status ?? null,
+          paymentStatus: session.payment_status ?? null,
+        });
+      } catch {
+        res.status(404).json({
+          verified: false,
+          error: 'Unable to verify that Checkout Session with Stripe.',
+          code: 'CHECKOUT_SESSION_NOT_FOUND',
+        });
+      }
+    }
+  );
+
   // ==================== CREATOR CAMPAIGN, IMAGE & POST ROUTES (SERVER-ENFORCED QUOTAS) ====================
 
   app.get(
@@ -498,6 +576,55 @@ export function createApp(options: CreateAppOptions = {}): {
         res.json({ campaign: formatCreatorCampaign(campaign, posts) });
       } catch (err) {
         handleRouteError(res, err, 'Unable to fetch campaign.');
+      }
+    }
+  );
+
+  app.patch(
+    '/api/campaigns/:id',
+    requireFirebaseAuth,
+    requireVerifiedEmail,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const user = req.firebaseUser!;
+      const rawName =
+        typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 120) : undefined;
+      const rawClientName =
+        typeof req.body?.clientName === 'string'
+          ? req.body.clientName.trim().slice(0, 120)
+          : undefined;
+
+      if (rawName === undefined && rawClientName === undefined) {
+        res.status(400).json({ error: 'Provide a campaign name or client name to update.' });
+        return;
+      }
+      if (rawName !== undefined && rawName.length < 2) {
+        res.status(400).json({ error: 'Campaign name must be at least 2 characters.' });
+        return;
+      }
+      if (rawClientName !== undefined && rawClientName.length < 2) {
+        res.status(400).json({ error: 'Client name must be at least 2 characters.' });
+        return;
+      }
+
+      try {
+        const campaign = await store.getCampaign(req.params.id);
+        if (!campaign) {
+          res.status(404).json({ error: 'Campaign not found.' });
+          return;
+        }
+        if (campaign.creatorId !== user.uid) {
+          res.status(403).json({ error: 'You do not have permission to update this campaign.' });
+          return;
+        }
+
+        const updated = await store.updateCampaign(campaign.id, {
+          ...(rawName !== undefined ? { name: rawName } : {}),
+          ...(rawClientName !== undefined ? { clientName: rawClientName } : {}),
+        });
+        const posts = await store.listPostsForReviewToken(updated!.activeReviewToken);
+        res.json({ campaign: formatCreatorCampaign(updated!, posts) });
+      } catch (err) {
+        handleRouteError(res, err, 'Unable to update campaign.');
       }
     }
   );
@@ -1205,6 +1332,69 @@ export function createApp(options: CreateAppOptions = {}): {
       handleRouteError(res, err, 'Unable to add client comment.');
     }
   });
+
+  // ==================== PUBLIC CONTACT & ACCOUNT CLEANUP ROUTES ====================
+
+  const contactRateLimits = new Map<string, { count: number; resetAt: number }>();
+
+  app.post('/api/contact', async (req: Request, res: Response) => {
+    const ip = req.ip || 'unknown';
+    const now = Date.now();
+    const entry = contactRateLimits.get(ip);
+    if (entry && entry.resetAt > now && entry.count >= 5) {
+      res.status(429).json({ error: 'Too many contact requests. Please try again in a few minutes.' });
+      return;
+    }
+    if (!entry || entry.resetAt <= now) {
+      contactRateLimits.set(ip, { count: 1, resetAt: now + 10 * 60 * 1000 });
+    } else {
+      entry.count += 1;
+    }
+
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().slice(0, 160) : '';
+    const message =
+      typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 2000) : '';
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      res.status(400).json({ error: 'Please enter a valid email address.' });
+      return;
+    }
+    if (!message || message.length < 3) {
+      res.status(400).json({ error: 'Please include a short note about your workflow or question.' });
+      return;
+    }
+
+    try {
+      const saved = await store.saveContactInquiry({ email, message });
+      res.status(201).json({ ok: true, id: saved.id });
+    } catch (err) {
+      handleRouteError(res, err, 'Unable to submit your message right now.');
+    }
+  });
+
+  app.delete(
+    '/api/account',
+    requireFirebaseAuth,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const user = req.firebaseUser!;
+      const confirm = typeof req.body?.confirm === 'string' ? req.body.confirm.trim() : '';
+      if (confirm !== 'DELETE') {
+        res.status(400).json({
+          error: 'Type DELETE to permanently confirm account and workspace data removal.',
+          code: 'CONFIRMATION_REQUIRED',
+        });
+        return;
+      }
+
+      try {
+        await store.deleteCreatorAccountData(user.uid);
+        await deleteAuthUser(user.uid);
+        res.json({ ok: true });
+      } catch (err) {
+        handleRouteError(res, err, 'Unable to delete account data.');
+      }
+    }
+  );
 
   // Return structured JSON 404 for any unmatched /api route instead of SPA HTML
   app.all(['/api', '/api/*'], (_req: Request, res: Response) => {

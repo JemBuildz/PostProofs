@@ -1,19 +1,31 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# PostProofs
 
-# Run and deploy your AI Studio app
+Clean client proof and approval links for social media calendars.
 
-This contains everything you need to run your app locally.
-https://ai.studio/apps/c08b0d6c-980d-489b-a651-5ba3244e59b5
+## Run Locally with npm
 
-## Run Locally
-
-**Prerequisites:**  Node.js
-
+**Prerequisites:** Node.js (v20+) and npm (v10+)
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. Copy `.env.example` to `.env` and fill in your **Stripe TEST mode** environment variables (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID_SOLO`, `STRIPE_PRICE_ID_STUDIO`, `APP_URL`):
+   `cp .env.example .env`
+3. Start the app:
    `npm run dev`
+4. Run verification checks:
+   - `npm test`
+   - `npm run lint`
+   - `npm run build`
+
+## Deploy to Netlify (GitHub CD + Custom Domain)
+
+- Build configuration and SPA redirects live in [`netlify.toml`](netlify.toml).
+- Backend Express routes (`/api/*`) run through [`netlify/functions/api.mts`](netlify/functions/api.mts).
+- Configure these environment variables in Netlify (**Project configuration -> Environment variables**, scope **Functions**):
+  - `APP_URL` (`https://your-custom-domain.com`)
+  - `STRIPE_SECRET_KEY` (`sk_test_...`)
+  - `STRIPE_WEBHOOK_SECRET` (`whsec_...` from Stripe Dashboard webhook `https://your-custom-domain.com/api/webhooks/stripe`)
+  - `STRIPE_PRICE_ID_SOLO` (`price_...`)
+  - `STRIPE_PRICE_ID_STUDIO` (`price_...`)
+  - `FIREBASE_CLIENT_EMAIL` & `FIREBASE_PRIVATE_KEY` (Firebase Admin service account credentials for non-GCP hosting; kept under Netlify's ~4 KB combined function env cap)
+- Add your `.netlify.app` subdomain and custom domain to **Firebase Console -> Authentication -> Settings -> Authorized domains**.

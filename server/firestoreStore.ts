@@ -14,6 +14,7 @@ import type {
   CampaignImageRecord,
   CampaignRecord,
   CommentRecord,
+  ContactInquiryRecord,
   ImageBinaryResult,
   PostApprovalStatus,
   PostProofStore,
@@ -291,6 +292,44 @@ export class FirestorePostProofStore implements PostProofStore {
       reviewLinkRevoked: false,
       createdAt: nowIso,
       updatedAt: nowIso,
+    };
+  }
+
+  async updateCampaign(
+    campaignId: string,
+    patch: Partial<Pick<CampaignRecord, 'name' | 'clientName'>>
+  ): Promise<CampaignRecord | null> {
+    const db = this.db();
+    const existing = await this.getCampaign(campaignId);
+    if (!existing) return null;
+
+    const nowTs = Timestamp.now();
+    const campaignPatch: Record<string, unknown> = { updatedAt: nowTs };
+    const reviewLinkPatch: Record<string, unknown> = { updatedAt: nowTs };
+
+    if (patch.name !== undefined) {
+      campaignPatch.name = patch.name;
+      reviewLinkPatch.campaignName = patch.name;
+    }
+    if (patch.clientName !== undefined) {
+      campaignPatch.clientName = patch.clientName;
+      reviewLinkPatch.clientName = patch.clientName;
+    }
+
+    const batch = db.batch();
+    batch.update(db.collection('campaigns').doc(campaignId), campaignPatch);
+    if (existing.activeReviewToken) {
+      batch.set(db.collection('reviewLinks').doc(existing.activeReviewToken), reviewLinkPatch, {
+        merge: true,
+      });
+    }
+    await batch.commit();
+
+    return {
+      ...existing,
+      ...(patch.name !== undefined ? { name: patch.name } : {}),
+      ...(patch.clientName !== undefined ? { clientName: patch.clientName } : {}),
+      updatedAt: nowTs.toDate().toISOString(),
     };
   }
 
@@ -883,5 +922,42 @@ export class FirestorePostProofStore implements PostProofStore {
       await bucket.file(storagePath).delete({ ignoreNotFound: true }).catch(() => {});
     }
     await imgRef.delete();
+  }
+
+  async saveContactInquiry(params: {
+    email: string;
+    message: string;
+  }): Promise<ContactInquiryRecord> {
+    const db = this.db();
+    const id = generateId('cnt');
+    const nowTs = Timestamp.now();
+    await db.collection('contactInquiries').doc(id).set({
+      email: params.email,
+      message: params.message,
+      createdAt: nowTs,
+    });
+    return {
+      id,
+      email: params.email,
+      message: params.message,
+      createdAt: nowTs.toDate().toISOString(),
+    };
+  }
+
+  async deleteCreatorAccountData(creatorId: string): Promise<void> {
+    const db = this.db();
+    const campaigns = await this.listCreatorCampaigns(creatorId);
+    for (const cmp of campaigns) {
+      await this.deleteCampaign(cmp.id);
+    }
+
+    const billingSnap = await db.collection('billing').doc(creatorId).get();
+    if (billingSnap.exists) {
+      const customerId = billingSnap.data()?.stripeCustomerId;
+      if (typeof customerId === 'string' && customerId) {
+        await db.collection('stripeCustomers').doc(customerId).delete().catch(() => {});
+      }
+      await billingSnap.ref.delete();
+    }
   }
 }

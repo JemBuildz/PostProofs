@@ -3,9 +3,9 @@ import {
   Check,
   Clock,
   Copy,
-  FileSpreadsheet,
   Instagram,
   Linkedin,
+  List,
   MessageSquare,
   RotateCcw,
   Send,
@@ -127,8 +127,8 @@ export const HeroProofViewer: React.FC<HeroProofViewerProps> = ({
                   : 'text-[#62657D] hover:text-[#1C1D33]'
               }`}
             >
-              <FileSpreadsheet className="h-3.5 w-3.5" aria-hidden="true" />
-              Source sheet
+              <List className="h-3.5 w-3.5" aria-hidden="true" />
+              Campaign list
             </button>
           </div>
 
@@ -323,13 +323,13 @@ export const HeroProofViewer: React.FC<HeroProofViewerProps> = ({
           </div>
         </div>
       ) : (
-        /* Source Spreadsheet Preview Mode */
+        /* Campaign List Overview Mode */
         <div className="bg-[#F8F9FD] p-4 sm:p-5">
           <div className="flex items-center justify-between gap-2 pb-3">
             <div className="text-xs text-[#595C75]">
-              <span className="font-semibold text-[#1C1D33]">spring-calendar-week2.csv</span>
+              <span className="font-semibold text-[#1C1D33]">Spring content · Week 2</span>
               <span className="mx-2 text-[#B3B6C9]">·</span>
-              <span>Click any row to inspect its generated proof</span>
+              <span>Select any post to inspect its client proof</span>
             </div>
           </div>
 
@@ -350,11 +350,20 @@ export const HeroProofViewer: React.FC<HeroProofViewerProps> = ({
                   return (
                     <tr
                       key={post.id}
+                      tabIndex={0}
+                      role="button"
                       onClick={() => {
                         onSelectPost(post.id);
                         setViewMode('proof');
                       }}
-                      className={`cursor-pointer transition-colors ${
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onSelectPost(post.id);
+                          setViewMode('proof');
+                        }
+                      }}
+                      className={`cursor-pointer transition-colors focus:outline-none focus:bg-[#F5F3FF] ${
                         isActive ? 'bg-[#F5F3FF]' : 'hover:bg-[#FAFBFD]'
                       }`}
                     >
@@ -377,7 +386,7 @@ export const HeroProofViewer: React.FC<HeroProofViewerProps> = ({
 
           <div className="mt-4 flex items-center justify-between gap-3">
             <p className="text-xs text-[#646780]">
-              Each spreadsheet row maps directly to a shareable proof card with caption and creative.
+              Every planned post gets its own proof card with image preview, caption, and decision history.
             </p>
             <button
               type="button"

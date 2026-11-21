@@ -1,209 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Check, X } from 'lucide-react';
-
-export type SelectedPlan = 'solo' | 'studio';
-
-interface PlanModalProps {
-  open: boolean;
-  initialPlan: SelectedPlan;
-  onClose: () => void;
-}
-
-export const EarlyAccessModal: React.FC<PlanModalProps> = ({ open, initialPlan, onClose }) => {
-  const [plan, setPlan] = useState<SelectedPlan>(initialPlan);
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [clientCount, setClientCount] = useState('1–3 clients');
-  const [error, setError] = useState('');
-  const [submitted, setSubmitted] = useState(false);
-
-  useEffect(() => {
-    setPlan(initialPlan);
-    setSubmitted(false);
-    setError('');
-  }, [initialPlan, open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmedEmail = email.trim();
-    if (!name.trim()) {
-      setError('Please enter your name or studio name.');
-      return;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      setError('Please enter a valid work email address.');
-      return;
-    }
-    setError('');
-    setSubmitted(true);
-  };
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#18192C]/50 p-4 backdrop-blur-[2px]"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="early-access-modal-title"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md rounded-2xl border border-[#DFE1EC] bg-white p-6 shadow-xl sm:p-7"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold text-[#5B42DC]">Early access</p>
-            <h2
-              id="early-access-modal-title"
-              className="mt-1 text-2xl font-bold tracking-tight text-[#1C1D33]"
-            >
-              {submitted ? 'You are on the early-access list' : 'Reserve your beta workspace'}
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close modal"
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#E5E6F0] text-[#5C5F78] transition-colors hover:bg-[#F7F8FC] hover:text-[#1C1D33] cursor-pointer"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {submitted ? (
-          <div className="mt-5">
-            <div className="rounded-xl border border-[#CBE7D9] bg-[#F1FAF5] p-4">
-              <div className="flex items-start gap-3">
-                <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#1E6F4A] text-white">
-                  <Check className="h-3.5 w-3.5" />
-                </span>
-                <div className="text-sm text-[#1E4633]">
-                  <p className="font-semibold">
-                    {plan === 'solo' ? 'Solo ($12/month)' : 'Studio ($29/month)'} selected for{' '}
-                    {name.trim()}
-                  </p>
-                  <p className="mt-1 text-[#2E5E47]">
-                    We’ve recorded <span className="font-medium">{email.trim()}</span>. Your invite
-                    and CSV starter template will arrive when the next beta onboarding batch opens.
-                  </p>
-                </div>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="mt-5 h-11 w-full rounded-xl bg-[#1C1D33] text-sm font-semibold text-white transition-colors hover:bg-[#2B2D4A] cursor-pointer"
-            >
-              Return to PostProofs
-            </button>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="mt-5 space-y-4" noValidate>
-            <div>
-              <span className="block text-xs font-semibold text-[#474A63]">Selected plan</span>
-              <div className="mt-1.5 grid grid-cols-2 gap-2 rounded-xl bg-[#F4F5FA] p-1">
-                <button
-                  type="button"
-                  onClick={() => setPlan('solo')}
-                  className={`rounded-lg py-2 text-xs font-semibold transition-colors cursor-pointer ${
-                    plan === 'solo'
-                      ? 'bg-white text-[#1C1D33] shadow-xs'
-                      : 'text-[#60637C] hover:text-[#1C1D33]'
-                  }`}
-                >
-                  Solo · $12/mo
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPlan('studio')}
-                  className={`rounded-lg py-2 text-xs font-semibold transition-colors cursor-pointer ${
-                    plan === 'studio'
-                      ? 'bg-white text-[#1C1D33] shadow-xs'
-                      : 'text-[#60637C] hover:text-[#1C1D33]'
-                  }`}
-                >
-                  Studio · $29/mo
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="ea-name" className="block text-xs font-semibold text-[#474A63]">
-                Your name or studio
-              </label>
-              <input
-                id="ea-name"
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Alex Rivera · Northlight Social"
-                className="mt-1.5 h-11 w-full rounded-xl border border-[#DCDEEB] bg-white px-3.5 text-sm text-[#1C1D33] placeholder:text-[#8E91A8] focus:border-[#5B42DC] focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="ea-email" className="block text-xs font-semibold text-[#474A63]">
-                Work email
-              </label>
-              <input
-                id="ea-email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="alex@studio.co"
-                className="mt-1.5 h-11 w-full rounded-xl border border-[#DCDEEB] bg-white px-3.5 text-sm text-[#1C1D33] placeholder:text-[#8E91A8] focus:border-[#5B42DC] focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="ea-clients" className="block text-xs font-semibold text-[#474A63]">
-                Active clients per month
-              </label>
-              <select
-                id="ea-clients"
-                value={clientCount}
-                onChange={(e) => setClientCount(e.target.value)}
-                className="mt-1.5 h-11 w-full rounded-xl border border-[#DCDEEB] bg-white px-3.5 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
-              >
-                <option value="1–3 clients">1–3 clients</option>
-                <option value="4–10 clients">4–10 clients</option>
-                <option value="10+ clients">More than 10 clients</option>
-              </select>
-            </div>
-
-            {error && (
-              <p className="text-xs font-medium text-[#B9382C]" role="alert">
-                {error}
-              </p>
-            )}
-
-            <button
-              type="submit"
-              className="h-11 w-full rounded-xl bg-[#5B42DC] text-sm font-semibold text-white transition-colors hover:bg-[#4931C2] cursor-pointer"
-            >
-              Request {plan === 'solo' ? 'Solo' : 'Studio'} early access
-            </button>
-
-            <p className="text-center text-xs text-[#73768E]">
-              No credit card required now. Monthly billing begins only when you activate your workspace.
-            </p>
-          </form>
-        )}
-      </div>
-    </div>
-  );
-};
+import { X } from 'lucide-react';
+import { api } from '../lib/api';
 
 interface InfoModalProps {
   mode: 'privacy' | 'contact' | null;
@@ -214,11 +11,17 @@ export const FooterInfoModal: React.FC<InfoModalProps> = ({ mode, onClose }) => 
   const [contactEmail, setContactEmail] = useState('');
   const [message, setMessage] = useState('');
   const [sent, setSent] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     setSent(false);
     setError('');
+    setSubmitting(false);
+    if (!mode) {
+      setContactEmail('');
+      setMessage('');
+    }
   }, [mode]);
 
   useEffect(() => {
@@ -232,18 +35,32 @@ export const FooterInfoModal: React.FC<InfoModalProps> = ({ mode, onClose }) => 
 
   if (!mode) return null;
 
-  const handleContactSubmit = (e: React.FormEvent) => {
+  const handleContactSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim())) {
+    const trimmedEmail = contactEmail.trim();
+    const trimmedMessage = message.trim();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
       setError('Please enter a valid email address.');
       return;
     }
-    if (!message.trim()) {
-      setError('Please include a short note about your workflow or question.');
+    if (!trimmedMessage || trimmedMessage.length < 3) {
+      setError('Please include a short note about your question or workflow.');
       return;
     }
+
     setError('');
-    setSent(true);
+    setSubmitting(true);
+    try {
+      await api.submitContactInquiry({ email: trimmedEmail, message: trimmedMessage });
+      setSent(true);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Unable to submit your message. Please try again.'
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -280,12 +97,14 @@ export const FooterInfoModal: React.FC<InfoModalProps> = ({ mode, onClose }) => 
               accounts.
             </p>
             <p>
-              Uploaded calendar sheets, post creatives, and client approval notes remain private to
-              your workspace and are accessible only via unique, revocable review URLs.
+              Your campaigns, uploaded or imported post creatives, and client approval notes remain
+              private to your workspace and are accessible only via unique, revocable review URLs.
             </p>
             <p>
-              You can delete any campaign, creative asset, or client feedback thread at any time
-              from your workspace settings.
+              We use Firebase (Authentication, Firestore, Storage) for workspace state and Stripe
+              for subscription billing. You can delete any post or campaign (along with its stored
+              images) from the Campaigns tab, or permanently delete your account and all workspace
+              data from Settings.
             </p>
             <button
               type="button"
@@ -298,10 +117,10 @@ export const FooterInfoModal: React.FC<InfoModalProps> = ({ mode, onClose }) => 
         ) : sent ? (
           <div className="mt-4">
             <div className="rounded-xl border border-[#CBE7D9] bg-[#F1FAF5] p-4 text-sm text-[#1E4633]">
-              <p className="font-semibold">Message received</p>
+              <p className="font-semibold">Message saved</p>
               <p className="mt-1 text-[#2E5E47]">
-                Thanks for reaching out. We’ll reply to {contactEmail.trim()} within one business
-                day.
+                Thanks for reaching out. We’ve logged your inquiry and will follow up at{' '}
+                {contactEmail.trim()}.
               </p>
             </div>
             <button
@@ -321,6 +140,7 @@ export const FooterInfoModal: React.FC<InfoModalProps> = ({ mode, onClose }) => 
               <input
                 id="contact-email"
                 type="email"
+                maxLength={160}
                 value={contactEmail}
                 onChange={(e) => setContactEmail(e.target.value)}
                 placeholder="you@agency.co"
@@ -334,9 +154,10 @@ export const FooterInfoModal: React.FC<InfoModalProps> = ({ mode, onClose }) => 
               <textarea
                 id="contact-msg"
                 rows={3}
+                maxLength={2000}
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder="Questions about spreadsheet formats, client review links, or beta access..."
+                placeholder="Questions about client review links, post approvals, or plans..."
                 className="mt-1.5 w-full rounded-xl border border-[#DCDEEB] p-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
               />
             </div>
@@ -347,9 +168,10 @@ export const FooterInfoModal: React.FC<InfoModalProps> = ({ mode, onClose }) => 
             )}
             <button
               type="submit"
-              className="h-10 w-full rounded-xl bg-[#5B42DC] text-sm font-semibold text-white transition-colors hover:bg-[#4931C2] cursor-pointer"
+              disabled={submitting}
+              className="h-10 w-full rounded-xl bg-[#5B42DC] text-sm font-semibold text-white transition-colors hover:bg-[#4931C2] disabled:opacity-50 cursor-pointer"
             >
-              Send message
+              {submitting ? 'Sending…' : 'Send message'}
             </button>
           </form>
         )}

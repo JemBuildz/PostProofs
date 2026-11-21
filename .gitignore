@@ -11,3 +11,4 @@ coverage/
 .aistudio/
 .antigravity/
 .agents/
+.netlify/

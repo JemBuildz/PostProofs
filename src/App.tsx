@@ -1,10 +1,31 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft } from 'lucide-react';
-import { ClientReviewPage } from './components/ClientReviewPage';
-import { CreatorWorkspace } from './components/CreatorWorkspace';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
+import { ArrowLeft, Loader2 } from 'lucide-react';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LandingPage } from './components/LandingPage';
 import postproofsLogo from './assets/images/postproofs_logo.png';
+
+const ClientReviewPage = lazy(() =>
+  import('./components/ClientReviewPage').then((module) => ({
+    default: module.ClientReviewPage,
+  }))
+);
+
+const CreatorWorkspace = lazy(() =>
+  import('./components/CreatorWorkspace').then((module) => ({
+    default: module.CreatorWorkspace,
+  }))
+);
+
+function RouteLoadingFallback() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-[#FAFBFD] px-6 text-[#5B5E77]">
+      <div className="inline-flex items-center gap-2.5 rounded-xl border border-[#DFE1EC] bg-white px-4 py-2.5 text-sm font-medium shadow-xs">
+        <Loader2 className="h-4 w-4 animate-spin text-[#5B42DC]" aria-hidden="true" />
+        Loading…
+      </div>
+    </div>
+  );
+}
 
 export interface NavigateOptions {
   replace?: boolean;
@@ -137,20 +158,28 @@ export default function App() {
     const token = reviewMatch ? safeDecodeSegment(reviewMatch[1]) : '';
     return (
       <ErrorBoundary>
-        <ClientReviewPage token={token} onNavigate={navigate} />
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <ClientReviewPage token={token} onNavigate={navigate} />
+        </Suspense>
       </ErrorBoundary>
     );
   }
 
-  // Supported creator workspace routes: /app and /app/billing
-  if (normalized === '/app' || normalized === '/app/billing') {
+  // Supported creator workspace routes: /app, /app/billing, and /app/settings
+  if (
+    normalized === '/app' ||
+    normalized === '/app/billing' ||
+    normalized === '/app/settings'
+  ) {
     return (
       <ErrorBoundary>
-        <CreatorWorkspace
-          pathname={normalized}
-          search={route.search}
-          onNavigate={navigate}
-        />
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <CreatorWorkspace
+            pathname={normalized}
+            search={route.search}
+            onNavigate={navigate}
+          />
+        </Suspense>
       </ErrorBoundary>
     );
   }

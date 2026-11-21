@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { onAuthStateChanged, sendEmailVerification, signInWithPopup, signOut } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import {
   Check,
@@ -11,18 +11,31 @@ import {
   Link2,
   Link2Off,
   LogOut,
+  MailWarning,
   MessageSquare,
+  Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
   Send,
+  Settings,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import type { BillingStatusResponse } from '../lib/api';
+import {
+  getInitialStripeReturnNotice,
+  parseStripeReturnParams,
+  resolveStripeReturnNotice,
+} from '../lib/billingReturn';
+import type { CheckoutSessionCheckResult, ParsedStripeReturn } from '../lib/billingReturn';
+import { resolveSelectedCampaignId, resolveWorkspaceTab } from '../lib/workspaceState';
+import type { WorkspaceTab } from '../lib/workspaceState';
 import { auth, googleProvider } from '../lib/firebase';
 import postproofsLogo from '../assets/images/postproofs_logo.png';
+import { WorkspaceSettings } from './WorkspaceSettings';
 import {
   ALLOWED_CHANNELS,
   subscribeCreatorBilling,
@@ -103,13 +116,15 @@ function Thumbnail({ src, alt }: { src: string; alt: string }) {
     );
   }
   return (
-    <img
-      src={src}
-      alt={alt}
-      referrerPolicy="no-referrer"
-      onError={() => setFailed(true)}
-      className="aspect-square w-full rounded-xl border border-[#E5E6F0] bg-[#F8F9FD] object-cover"
-    />
+    <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl border border-[#E5E6F0] bg-[#F8F9FD]">
+      <img
+        src={src}
+        alt={alt}
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        className="h-full w-full object-contain"
+      />
+    </div>
   );
 }
 
@@ -146,7 +161,7 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState('');
 
-  const activeTab: 'campaigns' | 'billing' = pathname === '/app/billing' ? 'billing' : 'campaigns';
+  const activeTab = resolveWorkspaceTab(pathname);
   const [campaigns, setCampaigns] = useState<FirebaseCampaign[]>([]);
   const [selectedCampaignId, setSelectedCampaignIdState] = useState<string | null>(
     readStoredCampaignId
@@ -166,8 +181,10 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
   );
 
   const openTab = useCallback(
-    (tab: 'campaigns' | 'billing', options?: { replace?: boolean }) => {
-      onNavigate(tab === 'billing' ? '/app/billing' : '/app', options);
+    (tab: WorkspaceTab, options?: { replace?: boolean }) => {
+      const target =
+        tab === 'billing' ? '/app/billing' : tab === 'settings' ? '/app/settings' : '/app';
+      onNavigate(target, options);
     },
     [onNavigate]
   );
@@ -176,17 +193,22 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
   const [billingStatus, setBillingStatus] = useState<BillingStatusResponse | null>(null);
   const [billingLoading, setBillingLoading] = useState(false);
   const [billingBusyPlan, setBillingBusyPlan] = useState<'solo' | 'studio' | 'portal' | null>(null);
+  const [highlightedPlan, setHighlightedPlan] = useState<'solo' | 'studio' | null>(null);
   const [billingNotice, setBillingNotice] = useState('');
   const [billingError, setBillingError] = useState('');
 
-  // Campaign creation form state
+  // Campaign creation & rename state
   const [newCampaignName, setNewCampaignName] = useState('');
   const [newClientName, setNewClientName] = useState('');
   const [campaignError, setCampaignError] = useState('');
   const [campaignUpgradePrompt, setCampaignUpgradePrompt] = useState(false);
   const [campaignBusy, setCampaignBusy] = useState(false);
+  const [editingCampaign, setEditingCampaign] = useState(false);
+  const [editCampaignName, setEditCampaignName] = useState('');
+  const [editClientName, setEditClientName] = useState('');
+  const [editCampaignBusy, setEditCampaignBusy] = useState(false);
 
-  // Manual post entry form state
+  // Manual post entry & post edit form state
   const [showPostForm, setShowPostForm] = useState(false);
   const [postTitle, setPostTitle] = useState('');
   const [postChannel, setPostChannel] = useState<SocialChannel>('Instagram');
@@ -199,12 +221,38 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
   const [postUpgradePrompt, setPostUpgradePrompt] = useState(false);
   const [postBusy, setPostBusy] = useState(false);
 
-  // Link, campaign deletion & comment UI state
+  const [editingPostId, setEditingPostId] = useState<string | null>(null);
+  const [editPostTitle, setEditPostTitle] = useState('');
+  const [editPostChannel, setEditPostChannel] = useState<SocialChannel>('Instagram');
+  const [editPostDate, setEditPostDate] = useState('');
+  const [editPostCaption, setEditPostCaption] = useState('');
+  const [editPostBusy, setEditPostBusy] = useState(false);
+
+  // Link, deletion confirmations, verification & comment UI state
   const [linkBusy, setLinkBusy] = useState(false);
+  const [confirmLinkAction, setConfirmLinkAction] = useState<'revoke' | 'rotate' | null>(null);
   const [confirmDeleteCampaignId, setConfirmDeleteCampaignId] = useState<string | null>(null);
   const [deleteCampaignBusy, setDeleteCampaignBusy] = useState(false);
+  const [confirmDeletePostId, setConfirmDeletePostId] = useState<string | null>(null);
+  const [deletePostBusy, setDeletePostBusy] = useState(false);
   const [copiedToken, setCopiedToken] = useState(false);
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [verifyBannerBusy, setVerifyBannerBusy] = useState(false);
+  const [verifyBannerMessage, setVerifyBannerMessage] = useState('');
+  const [, setProfileTick] = useState(0);
+
+  const pendingStripeReturnRef = useRef<ParsedStripeReturn | null>(null);
+
+  const resetPostFormFields = useCallback(() => {
+    setPostTitle('');
+    setPostChannel('Instagram');
+    setPostDate(new Date().toISOString().slice(0, 10));
+    setPostCaption('');
+    setImageFile(null);
+    setImageUrl('');
+    setPostError('');
+    setPostUpgradePrompt(false);
+  }, []);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (firebaseUser) => {
@@ -221,55 +269,101 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
       const status = await api.getBillingStatus();
       setBillingStatus(status);
       setBillingError('');
+
+      const pending = pendingStripeReturnRef.current;
+      if (pending?.billing === 'success') {
+        let sessionCheck: CheckoutSessionCheckResult | null = null;
+        if (
+          !status.entitlements.isPaidActive &&
+          pending.hasValidSessionId &&
+          pending.sessionId &&
+          status.stripeConfigured
+        ) {
+          sessionCheck = await api
+            .checkCheckoutSession(pending.sessionId)
+            .catch(() => ({ verified: false }));
+        }
+        setBillingNotice(
+          resolveStripeReturnNotice({
+            billing: pending.billing,
+            hasValidSessionId: pending.hasValidSessionId,
+            billingStatus: status,
+            sessionCheck,
+          })
+        );
+        if (status.entitlements.isPaidActive) {
+          pendingStripeReturnRef.current = null;
+        }
+      }
     } catch (err) {
       setBillingError(err instanceof Error ? err.message : 'Unable to fetch billing status.');
+      const pending = pendingStripeReturnRef.current;
+      if (pending?.billing === 'success') {
+        setBillingNotice(
+          resolveStripeReturnNotice({
+            billing: pending.billing,
+            hasValidSessionId: pending.hasValidSessionId,
+            billingStatus: null,
+            verificationFailed: true,
+          })
+        );
+      }
     } finally {
       setBillingLoading(false);
     }
   }, []);
 
-  // Consume query parameters (?plan=solo|studio, ?tab=billing, or ?billing=success|canceled)
-  // and normalize the URL to /app/billing so params do not stick or snap users back from Campaigns.
-  // IMPORTANT: ?billing=success is NEVER treated as proof of payment; we only display an
-  // informational message and refresh server-authoritative /api/billing/status.
+  // Consume query parameters (?plan=solo|studio, ?tab=billing, or ?billing=success|canceled).
+  // Wait for authReady so signed-out users keep query parameters (such as session_id or ?plan=)
+  // across a reload prior to signing in, and only normalize URL to /app/billing once signed in.
+  // IMPORTANT: ?billing=success is NEVER treated as proof of payment; access comes strictly from
+  // server-verified billing status updated by signed Stripe webhooks.
   useEffect(() => {
-    if (!search) return;
-    const params = new URLSearchParams(search);
-    const planParam = params.get('plan');
-    const billingParam = params.get('billing');
-    const tabParam = params.get('tab');
+    if (!authReady || !search) return;
+    const parsed = parseStripeReturnParams(search);
+    const shouldOpenBilling =
+      parsed.plan !== null || parsed.tab === 'billing' || parsed.billing !== null;
 
-    let shouldOpenBilling = false;
-
-    if (planParam === 'solo' || planParam === 'studio' || tabParam === 'billing') {
-      shouldOpenBilling = true;
+    if (parsed.plan) {
+      setHighlightedPlan(parsed.plan);
     }
 
-    if (billingParam === 'success') {
-      shouldOpenBilling = true;
-      setBillingNotice(
-        'Checkout completed in Stripe. Waiting for the signed Stripe webhook to confirm and sync your subscription to Firestore.'
-      );
-      if (auth.currentUser) {
+    if (parsed.billing !== null) {
+      pendingStripeReturnRef.current = parsed;
+      setBillingNotice(getInitialStripeReturnNotice(parsed));
+    }
+
+    if (user && shouldOpenBilling) {
+      if (parsed.billing === 'success') {
         void refreshBillingStatus();
       }
-    } else if (billingParam === 'canceled') {
-      shouldOpenBilling = true;
-      setBillingNotice('Checkout was canceled. Your current plan has not changed.');
-    }
-
-    if (shouldOpenBilling) {
       openTab('billing', { replace: true });
     }
-  }, [search, openTab, refreshBillingStatus]);
+  }, [authReady, user, search, openTab, refreshBillingStatus]);
 
   // Subscribe to creator's campaigns and server-written billing record when signed in
   useEffect(() => {
-    if (!authReady || !user) {
+    if (!authReady) {
+      return;
+    }
+
+    if (!user) {
       setCampaigns([]);
       setSelectedCampaignId(null);
       setPosts([]);
       setBillingStatus(null);
+      setBillingError('');
+      setWorkspaceError('');
+      setCampaignError('');
+      setCampaignUpgradePrompt(false);
+      setShowPostForm(false);
+      setEditingCampaign(false);
+      setEditingPostId(null);
+      setConfirmDeleteCampaignId(null);
+      setConfirmDeletePostId(null);
+      setConfirmLinkAction(null);
+      setReplyDrafts({});
+      setVerifyBannerMessage('');
       return;
     }
 
@@ -279,10 +373,7 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
       user.uid,
       (items) => {
         setCampaigns(items);
-        setSelectedCampaignId((prev) => {
-          if (prev && items.some((c) => c.id === prev)) return prev;
-          return items[0]?.id ?? null;
-        });
+        setSelectedCampaignId((prev) => resolveSelectedCampaignId(prev, items));
       },
       (err) => setWorkspaceError(err.message)
     );
@@ -304,6 +395,17 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
   }, [authReady, user, refreshBillingStatus, setSelectedCampaignId]);
 
   const activeCampaign = campaigns.find((c) => c.id === selectedCampaignId) ?? null;
+
+  // Reset campaign-scoped transient edit/confirmation states when switching campaigns
+  useEffect(() => {
+    setEditingCampaign(false);
+    setConfirmDeleteCampaignId(null);
+    setConfirmDeletePostId(null);
+    setConfirmLinkAction(null);
+    setEditingPostId(null);
+    setShowPostForm(false);
+    resetPostFormFields();
+  }, [selectedCampaignId, resetPostFormFields]);
 
   // Subscribe to posts & comments for the selected campaign's active review link
   useEffect(() => {
@@ -337,7 +439,37 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
   };
 
   const handleSignOut = async () => {
+    pendingStripeReturnRef.current = null;
+    setBillingNotice('');
+    setHighlightedPlan(null);
     await signOut(auth);
+    onNavigate('/app', { replace: true });
+  };
+
+  const handleRefreshProfileAndUser = useCallback(async () => {
+    if (!auth.currentUser) return;
+    await auth.currentUser.reload();
+    await auth.currentUser.getIdToken(true);
+    setUser(auth.currentUser);
+    setProfileTick((t) => t + 1);
+  }, []);
+
+  const handleSendVerificationBanner = async () => {
+    if (!auth.currentUser) return;
+    setVerifyBannerBusy(true);
+    setVerifyBannerMessage('');
+    try {
+      await sendEmailVerification(auth.currentUser);
+      setVerifyBannerMessage(
+        `Verification email sent to ${auth.currentUser.email || 'your inbox'}. Open the link, then click Refresh status.`
+      );
+    } catch (err) {
+      setWorkspaceError(
+        err instanceof Error ? err.message : 'Unable to send verification email.'
+      );
+    } finally {
+      setVerifyBannerBusy(false);
+    }
   };
 
   const handleCreateCampaign = async (e: React.FormEvent) => {
@@ -363,6 +495,33 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
       setCampaignError(err instanceof Error ? err.message : 'Unable to create campaign.');
     } finally {
       setCampaignBusy(false);
+    }
+  };
+
+  const startEditingCampaign = () => {
+    if (!activeCampaign) return;
+    setEditCampaignName(activeCampaign.name);
+    setEditClientName(activeCampaign.clientName);
+    setEditingCampaign(true);
+    setConfirmDeleteCampaignId(null);
+    setWorkspaceError('');
+  };
+
+  const handleSaveCampaignEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeCampaign) return;
+    setEditCampaignBusy(true);
+    setWorkspaceError('');
+    try {
+      await api.updateCampaign(activeCampaign.id, {
+        name: editCampaignName,
+        clientName: editClientName,
+      });
+      setEditingCampaign(false);
+    } catch (err) {
+      setWorkspaceError(err instanceof Error ? err.message : 'Unable to update campaign.');
+    } finally {
+      setEditCampaignBusy(false);
     }
   };
 
@@ -404,10 +563,7 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
         imageUrl: resolvedImageUrl,
       });
 
-      setPostTitle('');
-      setPostCaption('');
-      setImageFile(null);
-      setImageUrl('');
+      resetPostFormFields();
       setShowPostForm(false);
       void refreshBillingStatus();
     } catch (err) {
@@ -420,12 +576,48 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
     }
   };
 
+  const startEditingPost = (post: FirebasePost) => {
+    setEditingPostId(post.id);
+    setEditPostTitle(post.title);
+    setEditPostChannel(post.channel);
+    setEditPostDate(post.scheduledDate);
+    setEditPostCaption(post.caption);
+    setConfirmDeletePostId(null);
+    setWorkspaceError('');
+  };
+
+  const handleSavePostEdit = async (
+    e: React.FormEvent,
+    postId: string,
+    markInReview = false
+  ) => {
+    e.preventDefault();
+    if (!activeCampaign) return;
+    setEditPostBusy(true);
+    setWorkspaceError('');
+    try {
+      await api.updatePost(activeCampaign.id, postId, {
+        title: editPostTitle,
+        caption: editPostCaption,
+        channel: editPostChannel,
+        scheduledDate: editPostDate,
+        ...(markInReview ? { status: 'in_review' } : {}),
+      });
+      setEditingPostId(null);
+    } catch (err) {
+      setWorkspaceError(err instanceof Error ? err.message : 'Unable to save post changes.');
+    } finally {
+      setEditPostBusy(false);
+    }
+  };
+
   const handleRevokeLink = async () => {
     if (!user || !activeCampaign) return;
     setLinkBusy(true);
     setWorkspaceError('');
     try {
       await api.revokeReviewLink(activeCampaign.id);
+      setConfirmLinkAction(null);
     } catch (err) {
       setWorkspaceError(err instanceof Error ? err.message : 'Unable to revoke link.');
     } finally {
@@ -439,6 +631,7 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
     setWorkspaceError('');
     try {
       await api.regenerateReviewLink(activeCampaign.id);
+      setConfirmLinkAction(null);
     } catch (err) {
       setWorkspaceError(err instanceof Error ? err.message : 'Unable to generate a new link.');
     } finally {
@@ -466,12 +659,16 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
 
   const handleDeletePost = async (postId: string) => {
     if (!activeCampaign) return;
+    setDeletePostBusy(true);
     setWorkspaceError('');
     try {
       await api.deletePost(activeCampaign.id, postId);
+      setConfirmDeletePostId(null);
       void refreshBillingStatus();
     } catch (err) {
       setWorkspaceError(err instanceof Error ? err.message : 'Unable to delete post.');
+    } finally {
+      setDeletePostBusy(false);
     }
   };
 
@@ -511,6 +708,7 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
   const handleStartCheckout = async (plan: 'solo' | 'studio') => {
     setBillingError('');
     setBillingNotice('');
+    pendingStripeReturnRef.current = null;
     setBillingBusyPlan(plan);
     try {
       const { url } = await api.createCheckoutSession(plan);
@@ -525,6 +723,7 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
   const handleOpenPortal = async () => {
     setBillingError('');
     setBillingNotice('');
+    pendingStripeReturnRef.current = null;
     setBillingBusyPlan('portal');
     try {
       const { url } = await api.createBillingPortalSession();
@@ -588,6 +787,12 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
               client links, and manage your subscription.
             </p>
 
+            {billingNotice && (
+              <p className="mt-4 rounded-xl border border-[#D4CCF7] bg-[#F6F4FF] px-3.5 py-2.5 text-xs font-medium text-[#3F2DA8]">
+                {billingNotice}
+              </p>
+            )}
+
             {authError && (
               <p
                 role="alert"
@@ -627,24 +832,25 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
     <div className="min-h-screen bg-[#FAFBFD] text-[#1C1D33]">
       {/* Strict 3-Zone Top Bar */}
       <header className="sticky top-0 z-30 border-b border-[#ECEDF4] bg-white">
-        <div className="mx-auto flex h-[68px] max-w-[1280px] items-center justify-between gap-8 px-6">
+        <div className="mx-auto flex min-h-[68px] max-w-[1280px] flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-2 sm:flex-nowrap sm:gap-8 sm:px-6 sm:py-0">
           <button
             type="button"
-            onClick={() => onNavigate('/')}
-            aria-label="PostProofs home"
+            onClick={() => openTab('campaigns')}
+            aria-label="PostProofs workspace"
             className="inline-flex items-center whitespace-nowrap shrink-0 cursor-pointer"
           >
             <img
               src={postproofsLogo}
               alt="postproofs"
-              className="h-12 w-auto object-contain"
+              className="h-10 w-auto object-contain sm:h-12"
             />
           </button>
 
-          <nav className="flex items-center gap-6" aria-label="Workspace navigation">
+          <nav className="flex items-center gap-4 sm:gap-6" aria-label="Workspace navigation">
             <button
               type="button"
               onClick={() => openTab('campaigns')}
+              aria-current={activeTab === 'campaigns' ? 'page' : undefined}
               className={`text-sm whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
                 activeTab === 'campaigns'
                   ? 'font-semibold text-[#5B42DC]'
@@ -659,6 +865,7 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                 openTab('billing');
                 void refreshBillingStatus();
               }}
+              aria-current={activeTab === 'billing' ? 'page' : undefined}
               className={`text-sm whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
                 activeTab === 'billing'
                   ? 'font-semibold text-[#5B42DC]'
@@ -669,17 +876,23 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => onNavigate('/')}
-              className="text-sm font-medium text-[#555870] transition-colors hover:text-[#1C1D33] whitespace-nowrap shrink-0 cursor-pointer"
+              onClick={() => openTab('settings')}
+              aria-current={activeTab === 'settings' ? 'page' : undefined}
+              className={`inline-flex items-center gap-1.5 text-sm whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                activeTab === 'settings'
+                  ? 'font-semibold text-[#5B42DC]'
+                  : 'font-medium text-[#555870] hover:text-[#1C1D33]'
+              }`}
             >
-              Landing page
+              <Settings className="h-3.5 w-3.5" aria-hidden="true" />
+              Settings
             </button>
           </nav>
 
           <button
             type="button"
             onClick={handleSignOut}
-            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#E2E4F0] bg-white px-3.5 text-xs font-semibold text-[#32344D] transition-colors hover:border-[#C2B8FA] hover:text-[#5B42DC] whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#E2E4F0] bg-white px-3 text-xs font-semibold text-[#32344D] transition-colors hover:border-[#C2B8FA] hover:text-[#5B42DC] whitespace-nowrap shrink-0 cursor-pointer sm:px-3.5"
           >
             <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
             Sign out
@@ -687,17 +900,73 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1280px] px-6 py-8">
-        {workspaceError && (
+      <main className="mx-auto max-w-[1280px] px-4 py-8 sm:px-6">
+        {!user.emailVerified && (
           <div
-            role="alert"
-            className="mb-6 rounded-xl border border-[#F0C8C4] bg-[#FDF4F3] px-4 py-3 text-sm text-[#9B2B22]"
+            role="status"
+            className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E7C998] bg-[#FEF8EC] px-4 py-3 text-xs text-[#7D4908]"
           >
-            {workspaceError}
+            <div className="flex items-start gap-2.5">
+              <MailWarning className="mt-0.5 h-4 w-4 shrink-0 text-[#9A5B0A]" aria-hidden="true" />
+              <div>
+                <p className="font-semibold">Verify your email address to unlock workspace actions</p>
+                <p className="mt-0.5 text-[#8A520B]">
+                  {verifyBannerMessage ||
+                    'Your email is not verified yet. Verify your email before creating campaigns, uploading images, or upgrading your plan.'}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                disabled={verifyBannerBusy}
+                onClick={() => void handleSendVerificationBanner()}
+                className="inline-flex h-8 items-center rounded-lg bg-[#9A5B0A] px-3 text-xs font-semibold text-white hover:bg-[#7D4908] disabled:opacity-50 cursor-pointer"
+              >
+                Send verification email
+              </button>
+              <button
+                type="button"
+                disabled={verifyBannerBusy}
+                onClick={() => void handleRefreshProfileAndUser()}
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#E0BE86] bg-white px-2.5 text-xs font-semibold text-[#7D4908] hover:border-[#9A5B0A] disabled:opacity-50 cursor-pointer"
+              >
+                <RefreshCw className="h-3 w-3" aria-hidden="true" />
+                Refresh status
+              </button>
+            </div>
           </div>
         )}
 
-        {activeTab === 'billing' ? (
+        {workspaceError && (
+          <div
+            role="alert"
+            className="mb-6 flex items-center justify-between gap-3 rounded-xl border border-[#F0C8C4] bg-[#FDF4F3] px-4 py-3 text-sm text-[#9B2B22]"
+          >
+            <span>{workspaceError}</span>
+            <button
+              type="button"
+              onClick={() => setWorkspaceError('')}
+              aria-label="Dismiss error"
+              className="shrink-0 rounded-md p-1 text-[#9B2B22] hover:bg-[#F9E3E0] cursor-pointer"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+        )}
+
+        {activeTab === 'settings' ? (
+          <WorkspaceSettings
+            user={user}
+            billingStatus={billingStatus}
+            onOpenBilling={() => {
+              openTab('billing');
+              void refreshBillingStatus();
+            }}
+            onProfileUpdated={handleRefreshProfileAndUser}
+            onAccountDeleted={handleSignOut}
+          />
+        ) : activeTab === 'billing' ? (
           /* ==================== BILLING VIEW (STRIPE TEST MODE + FIREBASE UID) ==================== */
           <section className="mx-auto max-w-4xl space-y-6">
             <div className="rounded-2xl border border-[#E2E4F0] bg-white p-6 sm:p-7">
@@ -800,9 +1069,22 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
 
             {/* Plan Upgrade Cards */}
             <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-              <div className="flex flex-col justify-between rounded-2xl border border-[#E2E4F0] bg-white p-6">
+              <div
+                className={`flex flex-col justify-between rounded-2xl bg-white p-6 ${
+                  highlightedPlan === 'solo'
+                    ? 'border-2 border-[#5B42DC] ring-2 ring-[#5B42DC]/15'
+                    : 'border border-[#E2E4F0]'
+                }`}
+              >
                 <div>
-                  <p className="text-xs font-semibold text-[#5B42DC]">Solo</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold text-[#5B42DC]">Solo</p>
+                    {highlightedPlan === 'solo' && (
+                      <span className="rounded-full bg-[#F2EFFE] px-2.5 py-0.5 text-[11px] font-semibold text-[#5B42DC]">
+                        Selected plan
+                      </span>
+                    )}
+                  </div>
                   <div className="mt-2 flex items-baseline gap-1">
                     <span className="font-mono text-3xl font-bold tracking-tight text-[#1C1D33]">
                       $12
@@ -838,9 +1120,22 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                 </button>
               </div>
 
-              <div className="flex flex-col justify-between rounded-2xl border border-[#5B42DC] bg-white p-6">
+              <div
+                className={`flex flex-col justify-between rounded-2xl bg-white p-6 ${
+                  highlightedPlan === 'studio'
+                    ? 'border-2 border-[#5B42DC] ring-2 ring-[#5B42DC]/15'
+                    : 'border border-[#5B42DC]'
+                }`}
+              >
                 <div>
-                  <p className="text-xs font-semibold text-[#5B42DC]">Studio</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold text-[#5B42DC]">Studio</p>
+                    {highlightedPlan === 'studio' && (
+                      <span className="rounded-full bg-[#F2EFFE] px-2.5 py-0.5 text-[11px] font-semibold text-[#5B42DC]">
+                        Selected plan
+                      </span>
+                    )}
+                  </div>
                   <div className="mt-2 flex items-baseline gap-1">
                     <span className="font-mono text-3xl font-bold tracking-tight text-[#1C1D33]">
                       $29
@@ -1038,64 +1333,139 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                 <>
                   {/* Campaign Header + Private Revocable Client Link */}
                   <div className="rounded-2xl border border-[#E2E4F0] bg-white p-6">
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div>
-                        <p className="text-xs font-semibold text-[#5B42DC]">
-                          Client · {activeCampaign.clientName}
-                        </p>
-                        <h2 className="mt-1 text-2xl font-bold tracking-[-0.03em] text-[#1C1D33]">
-                          {activeCampaign.name}
-                        </h2>
-                        <p className="mt-1.5 font-mono text-xs tabular-nums text-[#5D607A]">
-                          {approvedCount} approved · {changesCount} needs changes · {inReviewCount}{' '}
-                          awaiting review
-                        </p>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => setShowPostForm((prev) => !prev)}
-                          disabled={activeCampaign.reviewLinkRevoked || deleteCampaignBusy}
-                          className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-[#5B42DC] px-4 text-xs font-semibold text-white transition-colors hover:bg-[#4931C2] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
-                        >
-                          <Plus className="h-4 w-4" aria-hidden="true" />
-                          {showPostForm ? 'Close post form' : 'Add post'}
-                        </button>
-
-                        {confirmDeleteCampaignId === activeCampaign.id ? (
-                          <>
-                            <button
-                              type="button"
-                              disabled={deleteCampaignBusy}
-                              onClick={() => void handleDeleteCampaign()}
-                              className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-[#9B2B22] px-3.5 text-xs font-semibold text-white transition-colors hover:bg-[#7F221B] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                    {editingCampaign ? (
+                      <form onSubmit={handleSaveCampaignEdit} className="space-y-4">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <div>
+                            <label
+                              htmlFor="edit-cmp-name"
+                              className="block text-xs font-semibold text-[#474A63]"
                             >
-                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                              {deleteCampaignBusy ? 'Deleting…' : 'Confirm delete'}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={deleteCampaignBusy}
-                              onClick={() => setConfirmDeleteCampaignId(null)}
-                              className="inline-flex h-10 items-center rounded-xl border border-[#DCDEEB] bg-white px-3 text-xs font-semibold text-[#474A63] transition-colors hover:text-[#1C1D33] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                              Campaign name
+                            </label>
+                            <input
+                              id="edit-cmp-name"
+                              type="text"
+                              required
+                              minLength={2}
+                              maxLength={120}
+                              value={editCampaignName}
+                              onChange={(e) => setEditCampaignName(e.target.value)}
+                              className="mt-1 h-10 w-full rounded-xl border border-[#DCDEEB] px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor="edit-cmp-client"
+                              className="block text-xs font-semibold text-[#474A63]"
                             >
-                              Cancel
-                            </button>
-                          </>
-                        ) : (
+                              Client name
+                            </label>
+                            <input
+                              id="edit-cmp-client"
+                              type="text"
+                              required
+                              minLength={2}
+                              maxLength={120}
+                              value={editClientName}
+                              onChange={(e) => setEditClientName(e.target.value)}
+                              className="mt-1 h-10 w-full rounded-xl border border-[#DCDEEB] px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-end gap-2">
                           <button
                             type="button"
-                            disabled={deleteCampaignBusy}
-                            onClick={() => setConfirmDeleteCampaignId(activeCampaign.id)}
-                            className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-[#EED2CE] bg-white px-3.5 text-xs font-semibold text-[#9B2B22] transition-colors hover:bg-[#FDF4F3] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                            disabled={editCampaignBusy}
+                            onClick={() => setEditingCampaign(false)}
+                            className="h-9 rounded-xl border border-[#DCDEEB] bg-white px-3.5 text-xs font-semibold text-[#474A63] hover:text-[#1C1D33] cursor-pointer"
                           >
-                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                            Delete campaign
+                            Cancel
                           </button>
-                        )}
+                          <button
+                            type="submit"
+                            disabled={editCampaignBusy}
+                            className="h-9 rounded-xl bg-[#5B42DC] px-4 text-xs font-semibold text-white hover:bg-[#4931C2] disabled:opacity-50 cursor-pointer"
+                          >
+                            {editCampaignBusy ? 'Saving…' : 'Save campaign'}
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <p className="text-xs font-semibold text-[#5B42DC]">
+                            Client · {activeCampaign.clientName}
+                          </p>
+                          <div className="mt-1 flex items-center gap-2">
+                            <h2 className="text-2xl font-bold tracking-[-0.03em] text-[#1C1D33]">
+                              {activeCampaign.name}
+                            </h2>
+                            <button
+                              type="button"
+                              onClick={startEditingCampaign}
+                              aria-label="Edit campaign details"
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#ECEDF4] text-[#6E718A] transition-colors hover:border-[#C2B8FA] hover:text-[#5B42DC] cursor-pointer"
+                            >
+                              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
+                          <p className="mt-1.5 font-mono text-xs tabular-nums text-[#5D607A]">
+                            {approvedCount} approved · {changesCount} needs changes ·{' '}
+                            {inReviewCount} awaiting review
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setShowPostForm((prev) => {
+                                if (prev) resetPostFormFields();
+                                return !prev;
+                              })
+                            }
+                            disabled={activeCampaign.reviewLinkRevoked || deleteCampaignBusy}
+                            className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-[#5B42DC] px-4 text-xs font-semibold text-white transition-colors hover:bg-[#4931C2] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                          >
+                            <Plus className="h-4 w-4" aria-hidden="true" />
+                            {showPostForm ? 'Close post form' : 'Add post'}
+                          </button>
+
+                          {confirmDeleteCampaignId === activeCampaign.id ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={deleteCampaignBusy}
+                                onClick={() => void handleDeleteCampaign()}
+                                className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-[#9B2B22] px-3.5 text-xs font-semibold text-white transition-colors hover:bg-[#7F221B] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                                {deleteCampaignBusy ? 'Deleting…' : 'Confirm delete'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={deleteCampaignBusy}
+                                onClick={() => setConfirmDeleteCampaignId(null)}
+                                className="inline-flex h-10 items-center rounded-xl border border-[#DCDEEB] bg-white px-3 text-xs font-semibold text-[#474A63] transition-colors hover:text-[#1C1D33] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={deleteCampaignBusy}
+                              onClick={() => setConfirmDeleteCampaignId(activeCampaign.id)}
+                              className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-[#EED2CE] bg-white px-3.5 text-xs font-semibold text-[#9B2B22] transition-colors hover:bg-[#FDF4F3] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                              Delete campaign
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     {confirmDeleteCampaignId === activeCampaign.id && (
                       <div
@@ -1128,7 +1498,7 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                       </div>
 
                       <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                        <code className="min-w-0 flex-1 truncate rounded-xl border border-[#E5E6F0] bg-[#FAFBFD] px-3 py-2 font-mono text-xs text-[#43465E]">
+                        <code className="w-full min-w-0 truncate rounded-xl border border-[#E5E6F0] bg-[#FAFBFD] px-3 py-2 font-mono text-xs text-[#43465E] sm:flex-1">
                           {activeCampaign.reviewLinkRevoked
                             ? 'Link revoked — clients immediately lose access to posts and uploaded images until you generate a new link.'
                             : `${window.location.origin}/review/${activeCampaign.activeReviewToken}`}
@@ -1154,38 +1524,89 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                               )}
                             </button>
 
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onNavigate(`/review/${activeCampaign.activeReviewToken}`)
-                              }
-                              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#DCDEEB] bg-white px-3 text-xs font-semibold text-[#23253E] transition-colors hover:border-[#5B42DC] hover:text-[#5B42DC] whitespace-nowrap shrink-0 cursor-pointer"
+                            <a
+                              href={`/review/${activeCampaign.activeReviewToken}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#DCDEEB] bg-white px-3 text-xs font-semibold text-[#23253E] transition-colors hover:border-[#5B42DC] hover:text-[#5B42DC] whitespace-nowrap shrink-0"
                             >
                               <ExternalLink className="h-3.5 w-3.5" />
                               Preview as client
-                            </button>
+                            </a>
 
-                            <button
-                              type="button"
-                              disabled={linkBusy}
-                              onClick={handleRevokeLink}
-                              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#EED2CE] bg-white px-3 text-xs font-semibold text-[#9B2B22] transition-colors hover:bg-[#FDF4F3] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
-                            >
-                              <Link2Off className="h-3.5 w-3.5" />
-                              Revoke
-                            </button>
+                            {confirmLinkAction === 'revoke' ? (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={linkBusy}
+                                  onClick={() => void handleRevokeLink()}
+                                  className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#9B2B22] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#7F221B] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                                >
+                                  Confirm revoke
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={linkBusy}
+                                  onClick={() => setConfirmLinkAction(null)}
+                                  className="inline-flex h-9 items-center rounded-xl border border-[#DCDEEB] bg-white px-2.5 text-xs font-semibold text-[#474A63] hover:text-[#1C1D33] cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={linkBusy}
+                                onClick={() => setConfirmLinkAction('revoke')}
+                                className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#EED2CE] bg-white px-3 text-xs font-semibold text-[#9B2B22] transition-colors hover:bg-[#FDF4F3] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                              >
+                                <Link2Off className="h-3.5 w-3.5" />
+                                Revoke
+                              </button>
+                            )}
                           </>
                         )}
 
-                        <button
-                          type="button"
-                          disabled={linkBusy}
-                          onClick={handleRotateLink}
-                          className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#DCDEEB] bg-white px-3 text-xs font-semibold text-[#23253E] transition-colors hover:border-[#5B42DC] hover:text-[#5B42DC] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                          {activeCampaign.reviewLinkRevoked ? 'Generate new link' : 'Rotate link'}
-                        </button>
+                        {activeCampaign.reviewLinkRevoked ? (
+                          <button
+                            type="button"
+                            disabled={linkBusy}
+                            onClick={() => void handleRotateLink()}
+                            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#DCDEEB] bg-white px-3 text-xs font-semibold text-[#23253E] transition-colors hover:border-[#5B42DC] hover:text-[#5B42DC] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                            Generate new link
+                          </button>
+                        ) : confirmLinkAction === 'rotate' ? (
+                          <>
+                            <button
+                              type="button"
+                              disabled={linkBusy}
+                              onClick={() => void handleRotateLink()}
+                              className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#1C1D33] px-3 text-xs font-semibold text-white hover:bg-[#2F3152] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                            >
+                              Confirm rotate
+                            </button>
+                            <button
+                              type="button"
+                              disabled={linkBusy}
+                              onClick={() => setConfirmLinkAction(null)}
+                              className="inline-flex h-9 items-center rounded-xl border border-[#DCDEEB] bg-white px-2.5 text-xs font-semibold text-[#474A63] hover:text-[#1C1D33] cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={linkBusy}
+                            onClick={() => setConfirmLinkAction('rotate')}
+                            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#DCDEEB] bg-white px-3 text-xs font-semibold text-[#23253E] transition-colors hover:border-[#5B42DC] hover:text-[#5B42DC] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                            Rotate link
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1330,6 +1751,7 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                             <div>
                               <input
                                 type="url"
+                                aria-label="External HTTPS image URL"
                                 maxLength={2000}
                                 value={imageUrl}
                                 onChange={(e) => setImageUrl(e.target.value)}
@@ -1366,7 +1788,10 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                         <div className="flex items-center justify-end gap-2.5">
                           <button
                             type="button"
-                            onClick={() => setShowPostForm(false)}
+                            onClick={() => {
+                              setShowPostForm(false);
+                              resetPostFormFields();
+                            }}
                             className="h-10 rounded-xl border border-[#DCDEEB] bg-white px-4 text-xs font-semibold text-[#474A63] hover:text-[#1C1D33] cursor-pointer"
                           >
                             Cancel
@@ -1405,100 +1830,247 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                           </div>
 
                           <div className="flex flex-col justify-between sm:col-span-9">
-                            <div>
-                              <div className="flex flex-wrap items-start justify-between gap-2">
-                                <div>
-                                  <h3 className="text-base font-bold text-[#1C1D33]">
-                                    {post.title}
-                                  </h3>
-                                  <p className="mt-0.5 font-mono text-xs tabular-nums text-[#6B6E87]">
-                                    {post.channel} · {post.scheduledDate}
-                                  </p>
+                            {editingPostId === post.id ? (
+                              <form
+                                onSubmit={(e) => void handleSavePostEdit(e, post.id, false)}
+                                className="space-y-3"
+                              >
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                                  <div>
+                                    <label
+                                      htmlFor={`edit-title-${post.id}`}
+                                      className="block text-[11px] font-semibold text-[#474A63]"
+                                    >
+                                      Title
+                                    </label>
+                                    <input
+                                      id={`edit-title-${post.id}`}
+                                      type="text"
+                                      required
+                                      maxLength={120}
+                                      value={editPostTitle}
+                                      onChange={(e) => setEditPostTitle(e.target.value)}
+                                      className="mt-1 h-9 w-full rounded-xl border border-[#DCDEEB] px-3 text-xs text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label
+                                      htmlFor={`edit-channel-${post.id}`}
+                                      className="block text-[11px] font-semibold text-[#474A63]"
+                                    >
+                                      Channel
+                                    </label>
+                                    <select
+                                      id={`edit-channel-${post.id}`}
+                                      value={editPostChannel}
+                                      onChange={(e) =>
+                                        setEditPostChannel(e.target.value as SocialChannel)
+                                      }
+                                      className="mt-1 h-9 w-full rounded-xl border border-[#DCDEEB] bg-white px-2.5 text-xs text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                                    >
+                                      {ALLOWED_CHANNELS.map((ch) => (
+                                        <option key={ch} value={ch}>
+                                          {ch}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label
+                                      htmlFor={`edit-date-${post.id}`}
+                                      className="block text-[11px] font-semibold text-[#474A63]"
+                                    >
+                                      Target date
+                                    </label>
+                                    <input
+                                      id={`edit-date-${post.id}`}
+                                      type="date"
+                                      required
+                                      value={editPostDate}
+                                      onChange={(e) => setEditPostDate(e.target.value)}
+                                      className="mt-1 h-9 w-full rounded-xl border border-[#DCDEEB] px-2.5 font-mono text-xs text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                                    />
+                                  </div>
                                 </div>
-                                <div className="flex items-center gap-3">
-                                  <PostStatusText status={post.status} />
+                                <div>
+                                  <label
+                                    htmlFor={`edit-caption-${post.id}`}
+                                    className="block text-[11px] font-semibold text-[#474A63]"
+                                  >
+                                    Caption
+                                  </label>
+                                  <textarea
+                                    id={`edit-caption-${post.id}`}
+                                    rows={3}
+                                    required
+                                    maxLength={2200}
+                                    value={editPostCaption}
+                                    onChange={(e) => setEditPostCaption(e.target.value)}
+                                    className="mt-1 w-full rounded-xl border border-[#DCDEEB] p-2.5 text-xs text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                                  />
+                                </div>
+                                <div className="flex flex-wrap items-center justify-end gap-2">
                                   <button
                                     type="button"
-                                    onClick={() => handleDeletePost(post.id)}
-                                    aria-label={`Delete ${post.title}`}
-                                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#ECEDF4] text-[#7D8099] transition-colors hover:border-[#EED2CE] hover:text-[#9B2B22] cursor-pointer"
+                                    disabled={editPostBusy}
+                                    onClick={() => setEditingPostId(null)}
+                                    className="h-8 rounded-xl border border-[#DCDEEB] bg-white px-3 text-xs font-semibold text-[#474A63] hover:text-[#1C1D33] cursor-pointer"
                                   >
-                                    <Trash2 className="h-3.5 w-3.5" />
+                                    Cancel
                                   </button>
-                                </div>
-                              </div>
-
-                              <p className="mt-2.5 whitespace-pre-wrap text-sm leading-relaxed text-[#43465E]">
-                                {post.caption}
-                              </p>
-
-                              <div className="mt-4 border-t border-[#ECEDF4] pt-3.5">
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#5E617A]">
-                                    <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
-                                    Comments ({post.comments.length})
-                                  </span>
-
+                                  <button
+                                    type="submit"
+                                    disabled={editPostBusy}
+                                    className="h-8 rounded-xl border border-[#5B42DC] bg-white px-3 text-xs font-semibold text-[#5B42DC] hover:bg-[#F6F4FF] disabled:opacity-50 cursor-pointer"
+                                  >
+                                    {editPostBusy ? 'Saving…' : 'Save changes'}
+                                  </button>
                                   {post.status === 'changes_requested' && (
                                     <button
                                       type="button"
-                                      onClick={() => handleResetPostReview(post.id)}
-                                      className="text-xs font-semibold text-[#5B42DC] hover:underline cursor-pointer"
+                                      disabled={editPostBusy}
+                                      onClick={(e) => void handleSavePostEdit(e, post.id, true)}
+                                      className="h-8 rounded-xl bg-[#5B42DC] px-3 text-xs font-semibold text-white hover:bg-[#4931C2] disabled:opacity-50 cursor-pointer"
                                     >
-                                      Mark ready for re-review
+                                      Save & mark ready for re-review
                                     </button>
                                   )}
                                 </div>
-
-                                {post.comments.length > 0 && (
-                                  <div className="mt-2.5 space-y-2">
-                                    {post.comments.map((comment) => (
-                                      <div
-                                        key={comment.id}
-                                        className="rounded-xl border border-[#ECEDF4] bg-[#FAFBFD] px-3 py-2 text-xs"
-                                      >
-                                        <span className="font-semibold text-[#1C1D33]">
-                                          {comment.authorName} ·{' '}
-                                          {comment.authorRole === 'client' ? 'Client' : 'Creator'}
-                                        </span>
-                                        <p className="mt-0.5 leading-relaxed text-[#4A4D66]">
-                                          {comment.body}
-                                        </p>
-                                      </div>
-                                    ))}
+                              </form>
+                            ) : (
+                              <div>
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <div>
+                                    <h3 className="text-base font-bold text-[#1C1D33]">
+                                      {post.title}
+                                    </h3>
+                                    <p className="mt-0.5 font-mono text-xs tabular-nums text-[#6B6E87]">
+                                      {post.channel} · {post.scheduledDate}
+                                    </p>
                                   </div>
-                                )}
-
-                                {!activeCampaign.reviewLinkRevoked && (
-                                  <form
-                                    onSubmit={(e) => handleCreatorReply(e, post.id)}
-                                    className="mt-2.5 flex items-center gap-2"
-                                  >
-                                    <input
-                                      type="text"
-                                      maxLength={1500}
-                                      value={replyDrafts[post.id] || ''}
-                                      onChange={(e) =>
-                                        setReplyDrafts((prev) => ({
-                                          ...prev,
-                                          [post.id]: e.target.value,
-                                        }))
-                                      }
-                                      placeholder="Reply to client feedback…"
-                                      className="h-9 min-w-0 flex-1 rounded-xl border border-[#DCDEEB] px-3 text-xs text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
-                                    />
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <PostStatusText status={post.status} />
                                     <button
-                                      type="submit"
-                                      disabled={!(replyDrafts[post.id] || '').trim()}
-                                      className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#DCDEEB] bg-white px-3 text-xs font-semibold text-[#23253E] hover:border-[#5B42DC] hover:text-[#5B42DC] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                                      type="button"
+                                      onClick={() => startEditingPost(post)}
+                                      aria-label={`Edit ${post.title}`}
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#ECEDF4] text-[#7D8099] transition-colors hover:border-[#C2B8FA] hover:text-[#5B42DC] cursor-pointer"
                                     >
-                                      <Send className="h-3 w-3" aria-hidden="true" />
-                                      Reply
+                                      <Pencil className="h-3.5 w-3.5" />
                                     </button>
-                                  </form>
-                                )}
+                                    {confirmDeletePostId === post.id ? (
+                                      <>
+                                        <button
+                                          type="button"
+                                          disabled={deletePostBusy}
+                                          onClick={() => void handleDeletePost(post.id)}
+                                          className="inline-flex h-8 items-center rounded-lg bg-[#9B2B22] px-2.5 text-[11px] font-semibold text-white hover:bg-[#7F221B] disabled:opacity-50 cursor-pointer"
+                                        >
+                                          {deletePostBusy ? 'Deleting…' : 'Confirm'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={deletePostBusy}
+                                          onClick={() => setConfirmDeletePostId(null)}
+                                          className="inline-flex h-8 items-center rounded-lg border border-[#DCDEEB] bg-white px-2 text-[11px] font-semibold text-[#474A63] hover:text-[#1C1D33] cursor-pointer"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setConfirmDeletePostId(post.id);
+                                          setEditingPostId(null);
+                                        }}
+                                        aria-label={`Delete ${post.title}`}
+                                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#ECEDF4] text-[#7D8099] transition-colors hover:border-[#EED2CE] hover:text-[#9B2B22] cursor-pointer"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <p className="mt-2.5 whitespace-pre-wrap text-sm leading-relaxed text-[#43465E]">
+                                  {post.caption}
+                                </p>
+
+                                <div className="mt-4 border-t border-[#ECEDF4] pt-3.5">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#5E617A]">
+                                      <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
+                                      Comments ({post.comments.length})
+                                    </span>
+
+                                    {post.status === 'changes_requested' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleResetPostReview(post.id)}
+                                        className="text-xs font-semibold text-[#5B42DC] hover:underline cursor-pointer"
+                                      >
+                                        Mark ready for re-review
+                                      </button>
+                                    )}
+                                  </div>
+
+                                  {post.comments.length > 0 && (
+                                    <div className="mt-2.5 space-y-2">
+                                      {post.comments.map((comment) => (
+                                        <div
+                                          key={comment.id}
+                                          className="rounded-xl border border-[#ECEDF4] bg-[#FAFBFD] px-3 py-2 text-xs"
+                                        >
+                                          <div className="flex items-center justify-between gap-2">
+                                            <span className="font-semibold text-[#1C1D33]">
+                                              {comment.authorName} ·{' '}
+                                              {comment.authorRole === 'client' ? 'Client' : 'Creator'}
+                                            </span>
+                                            <span className="font-mono text-[11px] text-[#7D8099]">
+                                              {new Date(comment.createdAt).toLocaleDateString()}
+                                            </span>
+                                          </div>
+                                          <p className="mt-0.5 leading-relaxed text-[#4A4D66]">
+                                            {comment.body}
+                                          </p>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  {!activeCampaign.reviewLinkRevoked && (
+                                    <form
+                                      onSubmit={(e) => handleCreatorReply(e, post.id)}
+                                      className="mt-2.5 flex items-center gap-2"
+                                    >
+                                      <input
+                                        type="text"
+                                        aria-label={`Reply to feedback on ${post.title}`}
+                                        maxLength={1500}
+                                        value={replyDrafts[post.id] || ''}
+                                        onChange={(e) =>
+                                          setReplyDrafts((prev) => ({
+                                            ...prev,
+                                            [post.id]: e.target.value,
+                                          }))
+                                        }
+                                        placeholder="Reply to client feedback…"
+                                        className="h-9 min-w-0 flex-1 rounded-xl border border-[#DCDEEB] px-3 text-xs text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                                      />
+                                      <button
+                                        type="submit"
+                                        disabled={!(replyDrafts[post.id] || '').trim()}
+                                        className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#DCDEEB] bg-white px-3 text-xs font-semibold text-[#23253E] hover:border-[#5B42DC] hover:text-[#5B42DC] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                                      >
+                                        <Send className="h-3 w-3" aria-hidden="true" />
+                                        Reply
+                                      </button>
+                                    </form>
+                                  )}
+                                </div>
                               </div>
-                            </div>
+                            )}
                           </div>
                         </article>
                       ))}

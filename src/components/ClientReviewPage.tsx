@@ -7,6 +7,7 @@ import {
   MessageSquare,
   RotateCcw,
   Send,
+  X,
 } from 'lucide-react';
 import {
   addClientPostComment,
@@ -54,6 +55,10 @@ function StatusLabel({ status }: { status: PostApprovalStatus }) {
 function PostPreviewImage({ src, alt }: { src: string; alt: string }) {
   const [failed, setFailed] = useState(false);
 
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
   if (failed || !src) {
     return (
       <div className="flex aspect-[4/3] w-full flex-col items-center justify-center rounded-xl border border-[#E5E6F0] bg-[#F4F5FA] p-6 text-center text-[#6E718A]">
@@ -64,13 +69,15 @@ function PostPreviewImage({ src, alt }: { src: string; alt: string }) {
   }
 
   return (
-    <img
-      src={src}
-      alt={alt}
-      referrerPolicy="no-referrer"
-      onError={() => setFailed(true)}
-      className="aspect-[4/3] w-full rounded-xl border border-[#E5E6F0] bg-[#F8F9FD] object-cover"
-    />
+    <div className="flex aspect-[4/3] w-full items-center justify-center overflow-hidden rounded-xl border border-[#E5E6F0] bg-[#F8F9FD]">
+      <img
+        src={src}
+        alt={alt}
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        className="h-full w-full object-contain"
+      />
+    </div>
   );
 }
 
@@ -92,6 +99,7 @@ export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNav
     setLoading(true);
     setRevoked(false);
     setReviewLink(null);
+    setReviewerName('');
     setPosts([]);
     setActionError('');
 
@@ -235,6 +243,13 @@ export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNav
             <p className="mt-4 text-xs text-[#797C94]">
               Ask your social media manager for the latest PostProofs review link.
             </p>
+            <button
+              type="button"
+              onClick={() => onNavigate('/')}
+              className="mt-6 inline-flex h-10 items-center justify-center rounded-xl border border-[#DCDEEB] bg-white px-4 text-xs font-semibold text-[#23253E] transition-colors hover:border-[#5B42DC] hover:text-[#5B42DC] cursor-pointer"
+            >
+              Go to PostProofs home
+            </button>
           </div>
         ) : (
           <div>
@@ -274,9 +289,17 @@ export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNav
             {actionError && (
               <div
                 role="alert"
-                className="mt-6 rounded-xl border border-[#F0C8C4] bg-[#FDF4F3] px-4 py-3 text-sm text-[#9B2B22]"
+                className="mt-6 flex items-center justify-between gap-3 rounded-xl border border-[#F0C8C4] bg-[#FDF4F3] px-4 py-3 text-sm text-[#9B2B22]"
               >
-                {actionError}
+                <span>{actionError}</span>
+                <button
+                  type="button"
+                  onClick={() => setActionError('')}
+                  aria-label="Dismiss error"
+                  className="shrink-0 rounded-md p-1 text-[#9B2B22] hover:bg-[#F9E3E0] cursor-pointer"
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
               </div>
             )}
 
@@ -297,7 +320,7 @@ export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNav
                         <PostPreviewImage src={post.imageUrl} alt={post.title} />
                         <div className="mt-3 flex items-center justify-between text-xs font-mono tabular-nums text-[#666982]">
                           <span>
-                            0{idx + 1} · {post.channel}
+                            {String(idx + 1).padStart(2, '0')} · {post.channel}
                           </span>
                           <span>{post.scheduledDate}</span>
                         </div>

@@ -140,6 +140,16 @@ export const api = {
     });
   },
 
+  updateCampaign(campaignId: string, payload: { name?: string; clientName?: string }) {
+    return requestAuthedJson<{ campaign: CreatorCampaign }>(
+      `/api/campaigns/${encodeURIComponent(campaignId)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
   deleteCampaign(campaignId: string) {
     return requestAuthedJson<{ ok: boolean }>(`/api/campaigns/${encodeURIComponent(campaignId)}`, {
       method: 'DELETE',
@@ -216,6 +226,26 @@ export const api = {
     );
   },
 
+  updatePost(
+    campaignId: string,
+    postId: string,
+    payload: {
+      title?: string;
+      caption?: string;
+      channel?: string;
+      scheduledDate?: string;
+      status?: 'in_review';
+    }
+  ) {
+    return requestAuthedJson<{ post: ApiPost }>(
+      `/api/campaigns/${encodeURIComponent(campaignId)}/posts/${encodeURIComponent(postId)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
   resetPostToInReview(campaignId: string, postId: string) {
     return requestAuthedJson<{ post: ApiPost }>(
       `/api/campaigns/${encodeURIComponent(campaignId)}/posts/${encodeURIComponent(postId)}`,
@@ -249,6 +279,15 @@ export const api = {
     return requestAuthedJson<BillingStatusResponse>('/api/billing/status');
   },
 
+  checkCheckoutSession(sessionId: string) {
+    return requestAuthedJson<{
+      verified: boolean;
+      sessionId?: string;
+      status?: string | null;
+      paymentStatus?: string | null;
+    }>(`/api/billing/checkout-session?session_id=${encodeURIComponent(sessionId)}`);
+  },
+
   createCheckoutSession(plan: 'solo' | 'studio') {
     return requestAuthedJson<{ url: string; sessionId: string }>('/api/billing/checkout-session', {
       method: 'POST',
@@ -260,5 +299,28 @@ export const api = {
     return requestAuthedJson<{ url: string }>('/api/billing/portal-session', {
       method: 'POST',
     });
+  },
+
+  deleteAccount(confirm: string) {
+    return requestAuthedJson<{ ok: boolean }>('/api/account', {
+      method: 'DELETE',
+      body: JSON.stringify({ confirm }),
+    });
+  },
+
+  async submitContactInquiry(payload: { email: string; message: string }) {
+    const res = await fetch('/api/contact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok) {
+      throw new ApiError(
+        typeof data.error === 'string' ? data.error : 'Unable to send your message.',
+        res.status
+      );
+    }
+    return data as { ok: boolean; id: string };
   },
 };

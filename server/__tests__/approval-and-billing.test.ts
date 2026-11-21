@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
 import Stripe from 'stripe';
 import { createApp } from '../app.ts';
+import { handleExpressWebRequest } from '../netlifyBridge.ts';
 import {
   detectImageFormat,
   ExternalImageError,
@@ -74,6 +75,27 @@ function buildMockStripeClient() {
             id: `cs_test_${captured.checkoutSessionsCreated.length}`,
             url: `https://checkout.stripe.com/c/pay/cs_test_${captured.checkoutSessionsCreated.length}`,
           };
+        },
+        retrieve: async (sessionId: string) => {
+          if (sessionId === 'cs_test_1') {
+            return {
+              id: 'cs_test_1',
+              status: 'open',
+              payment_status: 'unpaid',
+              client_reference_id: 'uid_creator_a',
+              metadata: { userId: 'uid_creator_a', plan: 'solo' },
+            };
+          }
+          if (sessionId === 'cs_test_paid_pending_webhook') {
+            return {
+              id: 'cs_test_paid_pending_webhook',
+              status: 'complete',
+              payment_status: 'paid',
+              client_reference_id: 'uid_creator_a',
+              metadata: { userId: 'uid_creator_a', plan: 'solo' },
+            };
+          }
+          throw new Error('No such checkout.session');
         },
       },
     },
@@ -502,6 +524,45 @@ describe('PostProof Firebase-Unified Billing, Quotas, Review Links & Image Isola
     assert.equal(preWebhookStatus.data.subscriptionPlan, 'free');
     assert.equal(preWebhookStatus.data.subscriptionStatus, 'inactive');
     assert.equal(preWebhookStatus.data.hasStripeCustomer, true);
+
+    // Read-only Checkout Session check: validates ownership & test-mode prefix without granting access
+    const missingSessionCheck = await jsonRequest(baseUrl, '/api/billing/checkout-session', {
+      token: 'token-creator-a',
+    });
+    assert.equal(missingSessionCheck.status, 400);
+    assert.equal(missingSessionCheck.data.code, 'INVALID_SESSION_ID');
+
+    const liveSessionCheck = await jsonRequest(
+      baseUrl,
+      '/api/billing/checkout-session?session_id=cs_live_blocked',
+      { token: 'token-creator-a' }
+    );
+    assert.equal(liveSessionCheck.status, 400);
+    assert.equal(liveSessionCheck.data.code, 'INVALID_SESSION_ID');
+
+    const otherUserSessionCheck = await jsonRequest(
+      baseUrl,
+      '/api/billing/checkout-session?session_id=cs_test_1',
+      { token: 'token-creator-b' }
+    );
+    assert.equal(otherUserSessionCheck.status, 403);
+    assert.equal(otherUserSessionCheck.data.code, 'SESSION_USER_MISMATCH');
+
+    const paidPendingCheck = await jsonRequest(
+      baseUrl,
+      '/api/billing/checkout-session?session_id=cs_test_paid_pending_webhook',
+      { token: 'token-creator-a' }
+    );
+    assert.equal(paidPendingCheck.status, 200);
+    assert.equal(paidPendingCheck.data.verified, true);
+    assert.equal(paidPendingCheck.data.paymentStatus, 'paid');
+
+    // Even a paid checkout session retrieve does NOT grant access before signed webhook delivery
+    const stillFreeBeforeWebhook = await jsonRequest(baseUrl, '/api/billing/status', {
+      token: 'token-creator-a',
+    });
+    assert.equal(stillFreeBeforeWebhook.data.subscriptionPlan, 'free');
+    assert.equal((stillFreeBeforeWebhook.data.entitlements as { isPaidActive: boolean }).isPaidActive, false);
 
     // Billing Portal session now succeeds for uid_creator_a
     const portalRes = await jsonRequest(baseUrl, '/api/billing/portal-session', {
@@ -952,5 +1013,253 @@ describe('PostProof Firebase-Unified Billing, Quotas, Review Links & Image Isola
     assert.equal(detectImageFormat(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>')), null);
     assert.equal(detectImageFormat(Buffer.from('<html><body>hello</body></html>')), null);
     assert.equal(MAX_IMAGE_BYTES, 5 * 1024 * 1024);
+  });
+
+  it('supports campaign/post editing, contact inquiries, and self-serve account deletion', async () => {
+    const acctStore = new InMemoryPostProofStore();
+    const deletedAuthUids: string[] = [];
+
+    const { app } = createApp({
+      store: acctStore,
+      verifyIdToken: mockVerifyIdToken,
+      deleteAuthUser: async (uid: string) => {
+        deletedAuthUids.push(uid);
+      },
+      stripeClient: null,
+      strictBillingGate: false,
+      fetchExternalImage: async () => ({
+        buffer: TINY_PNG,
+        contentType: 'image/png',
+        extension: '.png',
+      }),
+    });
+
+    const srv = await new Promise<import('node:http').Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const addr = srv.address() as AddressInfo;
+    const srvUrl = `http://127.0.0.1:${addr.port}`;
+
+    try {
+      // 1. Public contact endpoint validates & persists inquiry
+      const badContact = await jsonRequest(srvUrl, '/api/contact', {
+        method: 'POST',
+        body: { email: 'not-an-email', message: 'hi' },
+      });
+      assert.equal(badContact.status, 400);
+
+      const goodContact = await jsonRequest(srvUrl, '/api/contact', {
+        method: 'POST',
+        body: { email: 'agency@example.com', message: 'Looking forward to testing PostProofs!' },
+      });
+      assert.equal(goodContact.status, 201);
+      assert.equal(acctStore.contactInquiries.length, 1);
+      assert.equal(acctStore.contactInquiries[0].email, 'agency@example.com');
+
+      // 2. Campaign & Post editing
+      const createRes = await jsonRequest(srvUrl, '/api/campaigns', {
+        method: 'POST',
+        token: 'token-creator-a',
+        body: { name: 'Initial Name', clientName: 'Old Client' },
+      });
+      assert.equal(createRes.status, 201);
+      const cmp = createRes.data.campaign as { id: string; reviewToken: string };
+
+      const crossPatch = await jsonRequest(srvUrl, `/api/campaigns/${cmp.id}`, {
+        method: 'PATCH',
+        token: 'token-creator-b',
+        body: { name: 'Hijack' },
+      });
+      assert.equal(crossPatch.status, 403);
+
+      const patchCmp = await jsonRequest(srvUrl, `/api/campaigns/${cmp.id}`, {
+        method: 'PATCH',
+        token: 'token-creator-a',
+        body: { name: 'Updated Campaign', clientName: 'Updated Client' },
+      });
+      assert.equal(patchCmp.status, 200);
+      assert.equal((patchCmp.data.campaign as { name: string }).name, 'Updated Campaign');
+
+      // Client review link reflects renamed campaign & client
+      const reviewAfterRename = await jsonRequest(srvUrl, `/api/review/${cmp.reviewToken}`);
+      assert.equal(reviewAfterRename.status, 200);
+      assert.equal(
+        (reviewAfterRename.data.campaign as { name: string; clientName: string }).clientName,
+        'Updated Client'
+      );
+
+      const createPost = await jsonRequest(srvUrl, `/api/campaigns/${cmp.id}/posts`, {
+        method: 'POST',
+        token: 'token-creator-a',
+        body: {
+          title: 'Original Post',
+          caption: 'Original caption',
+          channel: 'Instagram',
+          scheduledDate: '2026-11-20',
+          imageUrl: 'https://cdn.partner.example/hero.png',
+        },
+      });
+      assert.equal(createPost.status, 201);
+      const createdPost = createPost.data.post as { id: string };
+
+      const patchPost = await jsonRequest(
+        srvUrl,
+        `/api/campaigns/${cmp.id}/posts/${createdPost.id}`,
+        {
+          method: 'PATCH',
+          token: 'token-creator-a',
+          body: {
+            title: 'Revised Post',
+            caption: 'Revised caption copy',
+            channel: 'LinkedIn',
+            scheduledDate: '2026-11-25',
+            status: 'in_review',
+          },
+        }
+      );
+      assert.equal(patchPost.status, 200);
+      const updatedPost = patchPost.data.post as { title: string; channel: string };
+      assert.equal(updatedPost.title, 'Revised Post');
+      assert.equal(updatedPost.channel, 'LinkedIn');
+
+      // 3. Self-serve account deletion requires DELETE confirmation & purges all data + auth user
+      const badDeleteAcct = await jsonRequest(srvUrl, '/api/account', {
+        method: 'DELETE',
+        token: 'token-creator-a',
+        body: { confirm: 'NOPE' },
+      });
+      assert.equal(badDeleteAcct.status, 400);
+
+      const delAcct = await jsonRequest(srvUrl, '/api/account', {
+        method: 'DELETE',
+        token: 'token-creator-a',
+        body: { confirm: 'DELETE' },
+      });
+      assert.equal(delAcct.status, 200);
+      assert.deepEqual(deletedAuthUids, ['uid_creator_a']);
+      assert.equal((await acctStore.listCreatorCampaigns('uid_creator_a')).length, 0);
+      assert.equal(acctStore.imageBinaries.size, 0);
+      assert.equal(await acctStore.getReviewLink(cmp.reviewToken), null);
+    } finally {
+      await new Promise<void>((resolve, reject) => srv.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
+  it('bridges Web Fetch requests cleanly for Netlify Functions (security headers, raw webhook, multipart upload, binary image)', async () => {
+    const bridgeStore = new InMemoryPostProofStore();
+    const { app } = createApp({
+      store: bridgeStore,
+      verifyIdToken: mockVerifyIdToken,
+      stripeConfig: {
+        secretKey: 'sk_test_fake_key_123',
+        webhookSecret: WEBHOOK_SECRET,
+        priceIdSolo: SOLO_PRICE_ID,
+        priceIdStudio: STUDIO_PRICE_ID,
+        appUrl: 'https://postproofs.example.com',
+      },
+      stripeClient: null,
+      strictBillingGate: false,
+      fetchExternalImage: async () => ({
+        buffer: TINY_PNG,
+        contentType: 'image/png',
+        extension: '.png',
+      }),
+    });
+
+    // 1. Security headers + JSON response on unauthenticated health/not-found API path
+    const healthRes = await handleExpressWebRequest(
+      app,
+      new Request('https://postproofs.example.com/api/health', { method: 'GET' }),
+      { ip: '203.0.113.10' }
+    );
+    assert.equal(healthRes.status, 200);
+    assert.equal(healthRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(healthRes.headers.get('x-frame-options'), 'DENY');
+    assert.equal(healthRes.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
+    assert.equal(healthRes.headers.get('x-powered-by'), null);
+
+    // 2. Stripe webhook receives exact raw payload for signature verification
+    const webhookPayload = JSON.stringify({
+      id: 'evt_netlify_bridge_1',
+      object: 'event',
+      type: 'checkout.session.completed',
+      data: {
+        object: {
+          id: 'cs_test_bridge_1',
+          object: 'checkout.session',
+          mode: 'subscription',
+          client_reference_id: 'uid_creator_b',
+          customer: 'cus_bridge_1',
+          subscription: 'sub_bridge_1',
+          payment_status: 'paid',
+          status: 'complete',
+          metadata: { userId: 'uid_creator_b', plan: 'solo' },
+        },
+      },
+    });
+    const webhookSig = new Stripe('sk_test_unused').webhooks.generateTestHeaderString({
+      payload: webhookPayload,
+      secret: WEBHOOK_SECRET,
+    });
+    const webhookRes = await handleExpressWebRequest(
+      app,
+      new Request('https://postproofs.example.com/api/webhooks/stripe', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'stripe-signature': webhookSig,
+        },
+        body: webhookPayload,
+      })
+    );
+    assert.equal(webhookRes.status, 200);
+    const bBilling = await bridgeStore.getBillingRecord('uid_creator_b');
+    assert.equal(bBilling?.plan, 'solo');
+
+    // 3. Create campaign -> multipart image upload -> binary PNG retrieval over Web Fetch
+    const createCmpRes = await handleExpressWebRequest(
+      app,
+      new Request('https://postproofs.example.com/api/campaigns', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer token-creator-b',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name: 'Netlify Bridge Campaign', clientName: 'Loomis Co' }),
+      })
+    );
+    assert.equal(createCmpRes.status, 201);
+    const createdCmp = (await createCmpRes.json()) as {
+      campaign: { id: string; reviewToken: string };
+    };
+
+    const form = new FormData();
+    form.append('image', new File([TINY_PNG], 'proof.png', { type: 'image/png' }));
+    const uploadRes = await handleExpressWebRequest(
+      app,
+      new Request(
+        `https://postproofs.example.com/api/campaigns/${createdCmp.campaign.id}/images`,
+        {
+          method: 'POST',
+          headers: { authorization: 'Bearer token-creator-b' },
+          body: form,
+        }
+      )
+    );
+    const uploadBody = await uploadRes.text();
+    assert.equal(uploadRes.status, 201, uploadBody);
+    const uploadJson = JSON.parse(uploadBody) as {
+      imageUrl: string;
+    };
+    assert.ok(uploadJson.imageUrl.includes(`/api/review/${createdCmp.campaign.reviewToken}/images/`));
+
+    const imgRes = await handleExpressWebRequest(
+      app,
+      new Request(`https://postproofs.example.com${uploadJson.imageUrl}`, { method: 'GET' })
+    );
+    assert.equal(imgRes.status, 200);
+    assert.equal(imgRes.headers.get('content-type'), 'image/png');
+    const fetchedBytes = Buffer.from(await imgRes.arrayBuffer());
+    assert.equal(Buffer.compare(fetchedBytes, TINY_PNG), 0);
   });
 });

@@ -121,6 +121,13 @@ export interface ImageBinaryResult {
   contentType: string;
 }
 
+export interface ContactInquiryRecord {
+  id: string;
+  email: string;
+  message: string;
+  createdAt: string;
+}
+
 export class StorageUnavailableError extends Error {
   status = 503;
   code = 'STORAGE_UNAVAILABLE';
@@ -224,6 +231,10 @@ export interface PostProofStore {
     name: string;
     clientName: string;
   }): Promise<CampaignRecord>;
+  updateCampaign(
+    campaignId: string,
+    patch: Partial<Pick<CampaignRecord, 'name' | 'clientName'>>
+  ): Promise<CampaignRecord | null>;
   deleteCampaign(campaignId: string): Promise<void>;
   revokeReviewLink(campaignId: string): Promise<CampaignRecord>;
   rotateReviewLink(campaignId: string): Promise<CampaignRecord>;
@@ -272,6 +283,10 @@ export interface PostProofStore {
   getCampaignImage(campaignId: string, imageId: string): Promise<CampaignImageRecord | null>;
   readCampaignImageBinary(image: CampaignImageRecord): Promise<ImageBinaryResult | null>;
   deleteCampaignImage(campaignId: string, imageId: string): Promise<void>;
+
+  // Contact inquiries & self-serve account cleanup
+  saveContactInquiry(params: { email: string; message: string }): Promise<ContactInquiryRecord>;
+  deleteCreatorAccountData(creatorId: string): Promise<void>;
 }
 
 /**
@@ -288,6 +303,7 @@ export class InMemoryPostProofStore implements PostProofStore {
   postsByToken = new Map<string, Map<string, PostRecord>>();
   imagesByCampaign = new Map<string, Map<string, CampaignImageRecord>>();
   imageBinaries = new Map<string, ImageBinaryResult>();
+  contactInquiries: ContactInquiryRecord[] = [];
 
   async getBillingRecord(userId: string): Promise<BillingRecord | null> {
     const rec = this.billingByUser.get(userId);
@@ -406,6 +422,26 @@ export class InMemoryPostProofStore implements PostProofStore {
     this.reviewLinks.set(token, reviewLink);
     this.postsByToken.set(token, new Map());
     return { ...campaign };
+  }
+
+  async updateCampaign(
+    campaignId: string,
+    patch: Partial<Pick<CampaignRecord, 'name' | 'clientName'>>
+  ): Promise<CampaignRecord | null> {
+    const cmp = this.campaigns.get(campaignId);
+    if (!cmp) return null;
+    const now = new Date().toISOString();
+    if (patch.name !== undefined) cmp.name = patch.name;
+    if (patch.clientName !== undefined) cmp.clientName = patch.clientName;
+    cmp.updatedAt = now;
+
+    const link = this.reviewLinks.get(cmp.activeReviewToken);
+    if (link) {
+      if (patch.name !== undefined) link.campaignName = patch.name;
+      if (patch.clientName !== undefined) link.clientName = patch.clientName;
+      link.updatedAt = now;
+    }
+    return { ...cmp };
   }
 
   async deleteCampaign(campaignId: string): Promise<void> {
@@ -688,5 +724,33 @@ export class InMemoryPostProofStore implements PostProofStore {
     if (!rec) return;
     bucket.delete(imageId);
     this.imageBinaries.delete(rec.storagePath);
+  }
+
+  async saveContactInquiry(params: {
+    email: string;
+    message: string;
+  }): Promise<ContactInquiryRecord> {
+    const record: ContactInquiryRecord = {
+      id: generateId('cnt'),
+      email: params.email,
+      message: params.message,
+      createdAt: new Date().toISOString(),
+    };
+    this.contactInquiries.push(record);
+    return { ...record };
+  }
+
+  async deleteCreatorAccountData(creatorId: string): Promise<void> {
+    const ownedIds = Array.from(this.campaigns.values())
+      .filter((c) => c.creatorId === creatorId)
+      .map((c) => c.id);
+    for (const cmpId of ownedIds) {
+      await this.deleteCampaign(cmpId);
+    }
+    const billing = this.billingByUser.get(creatorId);
+    if (billing?.stripeCustomerId) {
+      this.customerToUser.delete(billing.stripeCustomerId);
+    }
+    this.billingByUser.delete(creatorId);
   }
 }

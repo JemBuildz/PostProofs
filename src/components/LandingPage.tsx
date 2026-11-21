@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { onAuthStateChanged, signInWithPopup } from 'firebase/auth';
+import type { User } from 'firebase/auth';
 import {
   ArrowRight,
   ArrowUpRight,
@@ -17,6 +19,7 @@ import {
   INITIAL_CAMPAIGN_POSTS,
   ReviewStatus,
 } from '../data/campaignData';
+import { auth, googleProvider } from '../lib/firebase';
 import { getStatusMeta, HeroProofViewer } from './HeroProofViewer';
 import { FooterInfoModal } from './Modals';
 import postproofsLogo from '../assets/images/postproofs_logo.png';
@@ -31,6 +34,45 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(0);
   const [footerModal, setFooterModal] = useState<'privacy' | 'contact' | null>(null);
+  const [signedInUser, setSignedInUser] = useState<User | null>(() => auth.currentUser);
+  const [enteringWorkspace, setEnteringWorkspace] = useState(false);
+
+  useEffect(() => {
+    return onAuthStateChanged(auth, (firebaseUser) => {
+      setSignedInUser(firebaseUser);
+    });
+  }, []);
+
+  const handleEnterWorkspace = (targetPath: string) => {
+    if (enteringWorkspace) return;
+    if (auth.currentUser || signedInUser) {
+      onNavigate(targetPath);
+      return;
+    }
+
+    setEnteringWorkspace(true);
+    // Trigger signInWithPopup synchronously inside the click handler so browsers allow the popup.
+    signInWithPopup(auth, googleProvider)
+      .then((cred) => {
+        if (cred.user) {
+          onNavigate(targetPath);
+        }
+      })
+      .catch((err: unknown) => {
+        const code =
+          typeof err === 'object' && err !== null && 'code' in err
+            ? String((err as { code?: unknown }).code)
+            : '';
+        // If user closed/canceled Google sign-in, stay on the landing page;
+        // if popup was blocked or another error occurred, fall back to /app sign-in view.
+        if (code !== 'auth/popup-closed-by-user' && code !== 'auth/cancelled-popup-request') {
+          onNavigate(targetPath);
+        }
+      })
+      .finally(() => {
+        setEnteringWorkspace(false);
+      });
+  };
 
   const handleUpdateStatus = (postId: string, status: ReviewStatus) => {
     setPosts((prev) =>
@@ -126,10 +168,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
           <div className="flex items-center gap-3 shrink-0">
             <button
               type="button"
-              onClick={() => onNavigate('/app')}
-              className="hidden h-10 items-center justify-center gap-2 rounded-xl bg-[#5B42DC] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#4931C2] whitespace-nowrap shrink-0 md:inline-flex cursor-pointer"
+              disabled={enteringWorkspace}
+              onClick={() => handleEnterWorkspace('/app')}
+              className="hidden h-10 items-center justify-center gap-2 rounded-xl bg-[#5B42DC] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#4931C2] disabled:opacity-60 whitespace-nowrap shrink-0 md:inline-flex cursor-pointer"
             >
-              Open workspace
+              {enteringWorkspace ? 'Signing in…' : 'Open workspace'}
               <ArrowRight className="h-4 w-4" aria-hidden="true" />
             </button>
 
@@ -185,13 +228,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
             </div>
             <button
               type="button"
+              disabled={enteringWorkspace}
               onClick={() => {
                 setMobileNavOpen(false);
-                onNavigate('/app');
+                handleEnterWorkspace('/app');
               }}
-              className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#5B42DC] px-4 text-sm font-semibold text-white cursor-pointer"
+              className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#5B42DC] px-4 text-sm font-semibold text-white disabled:opacity-60 cursor-pointer"
             >
-              Open workspace
+              {enteringWorkspace ? 'Signing in…' : 'Open workspace'}
               <ArrowRight className="h-4 w-4" aria-hidden="true" />
             </button>
           </nav>
@@ -217,15 +261,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               </h1>
 
               <p className="mt-5 max-w-[46ch] text-[17px] leading-[1.68] text-[#555870]">
-                Turn your content calendar into clean, shareable post proofs. Clients can approve
-                or request changes in one place, and you can see what’s still waiting.
+                Turn your planned posts into clean, shareable proofs. Clients can approve or request
+                changes in one place, and you can see what’s still waiting.
               </p>
 
               <div className="mt-8 flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => onNavigate('/app')}
-                  className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-[#5B42DC] px-5 text-sm font-semibold text-white transition-colors hover:bg-[#4931C2] whitespace-nowrap shrink-0 cursor-pointer"
+                  disabled={enteringWorkspace}
+                  onClick={() => handleEnterWorkspace('/app')}
+                  className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-[#5B42DC] px-5 text-sm font-semibold text-white transition-colors hover:bg-[#4931C2] disabled:opacity-60 whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   Create a review link
                   <ArrowRight className="h-4 w-4" aria-hidden="true" />
@@ -451,7 +496,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
                   <div>
                     <p className="text-xs font-semibold text-[#6F728A]">Synced campaign overview</p>
                     <h3 className="mt-1 text-2xl font-bold tracking-[-0.03em] text-[#1C1D33]">
-                      Spring launch · {posts.length} posts
+                      Spring content · Week 2 · {posts.length} posts
                     </h3>
                   </div>
                   <p className="font-mono text-xs tabular-nums text-[#5D607A]">
@@ -527,8 +572,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
                 Pick a plan that fits your client list.
               </h2>
               <p className="mt-4 text-base leading-[1.7] text-[#5B5E77]">
-                Start with the essentials for sharing proofs and collecting approvals. Clear
-                monthly limits with no annual commitment required.
+                Start free with 1 campaign and up to 5 posts, or upgrade for higher active campaign,
+                post proof, and image storage capacity. Cancel anytime.
               </p>
             </div>
 
@@ -552,8 +597,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
 
                 <button
                   type="button"
-                  onClick={() => onNavigate('/app?plan=solo')}
-                  className="mt-6 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#D8DAEA] bg-white text-sm font-semibold text-[#1C1D33] transition-colors hover:border-[#5B42DC] hover:text-[#5B42DC] cursor-pointer"
+                  disabled={enteringWorkspace}
+                  onClick={() => handleEnterWorkspace('/app?plan=solo')}
+                  className="mt-6 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#D8DAEA] bg-white text-sm font-semibold text-[#1C1D33] transition-colors hover:border-[#5B42DC] hover:text-[#5B42DC] disabled:opacity-60 cursor-pointer"
                 >
                   Choose Solo
                   <ArrowRight className="h-4 w-4" aria-hidden="true" />
@@ -563,9 +609,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
                   <p className="text-xs font-semibold text-[#6E718A]">Includes</p>
                   <ul className="mt-3.5 space-y-3 text-sm text-[#43465E]">
                     {[
-                      '1 team member',
                       'Up to 3 active campaigns',
-                      'Up to 100 posts per month',
+                      'Up to 100 saved post proofs',
+                      '250 MB private image storage',
                       'Shareable revocable review links and approval status',
                     ].map((item) => (
                       <li key={item} className="flex items-start gap-2.5">
@@ -583,10 +629,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               <article className="flex flex-col rounded-2xl border-2 border-[#5B42DC] bg-white p-7 sm:p-8">
                 <div className="flex items-baseline justify-between gap-2">
                   <h3 className="text-xl font-bold text-[#1C1D33]">Studio</h3>
-                  <span className="text-xs font-semibold text-[#5B42DC]">For small studios</span>
+                  <span className="text-xs font-semibold text-[#5B42DC]">High-volume managers</span>
                 </div>
                 <p className="mt-2 text-sm leading-relaxed text-[#5B5E77]">
-                  For small teams managing multiple client review cycles.
+                  For active creators managing multiple client calendars at once.
                 </p>
 
                 <div className="mt-6 flex items-baseline gap-1.5 font-mono tabular-nums">
@@ -599,8 +645,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
 
                 <button
                   type="button"
-                  onClick={() => onNavigate('/app?plan=studio')}
-                  className="mt-6 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#5B42DC] text-sm font-semibold text-white transition-colors hover:bg-[#4931C2] cursor-pointer"
+                  disabled={enteringWorkspace}
+                  onClick={() => handleEnterWorkspace('/app?plan=studio')}
+                  className="mt-6 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#5B42DC] text-sm font-semibold text-white transition-colors hover:bg-[#4931C2] disabled:opacity-60 cursor-pointer"
                 >
                   Choose Studio
                   <ArrowRight className="h-4 w-4" aria-hidden="true" />
@@ -610,10 +657,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
                   <p className="text-xs font-semibold text-[#6E718A]">Everything in Solo, plus</p>
                   <ul className="mt-3.5 space-y-3 text-sm text-[#43465E]">
                     {[
-                      'Up to 3 team members',
                       'Up to 10 active campaigns',
-                      'Up to 500 posts per month',
-                      'Shared campaign review workspace',
+                      'Up to 500 saved post proofs',
+                      '1,024 MB private image storage',
+                      'Private revocable client links & URL image imports',
                     ].map((item) => (
                       <li key={item} className="flex items-start gap-2.5">
                         <Check
@@ -696,8 +743,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               <div className="mt-8">
                 <button
                   type="button"
-                  onClick={() => onNavigate('/app')}
-                  className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-white px-6 text-sm font-semibold text-[#1E1D38] transition-colors hover:bg-[#EEECFF] cursor-pointer"
+                  disabled={enteringWorkspace}
+                  onClick={() => handleEnterWorkspace('/app')}
+                  className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-white px-6 text-sm font-semibold text-[#1E1D38] transition-colors hover:bg-[#EEECFF] disabled:opacity-60 cursor-pointer"
                 >
                   Open creator workspace
                   <ArrowRight className="h-4 w-4" aria-hidden="true" />

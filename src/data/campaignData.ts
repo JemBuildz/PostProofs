@@ -47,9 +47,9 @@ export const INITIAL_CAMPAIGN_POSTS: CampaignPost[] = [
   },
   {
     id: 'post-2',
-    title: 'Spring collection launch carousel',
+    title: 'Spring collection launch teaser',
     channel: 'Instagram',
-    format: 'Carousel · 4 slides',
+    format: '4:5 Feed Post',
     scheduledDate: 'Apr 15',
     scheduledTime: '10:00 AM',
     caption:
@@ -124,6 +124,6 @@ export const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: 'How do plan limits and subscriptions work?',
     answer:
-      'Every account can start with 1 campaign and up to 5 posts before upgrading to Solo ($12/mo for 3 campaigns / 100 posts) or Studio ($29/mo for 10 campaigns / 500 posts). Billing is handled via Stripe Checkout and enforced server-side.',
+      'Every account starts free with 1 active campaign, up to 5 saved post proofs, and 25 MB of image storage. Solo ($12/mo) unlocks 3 campaigns, 100 post proofs, and 250 MB storage; Studio ($29/mo) unlocks 10 campaigns, 500 post proofs, and 1,024 MB storage. Billing runs via Stripe Checkout and limits are enforced server-side.',
   },
 ];
