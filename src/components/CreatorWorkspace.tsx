@@ -761,13 +761,22 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
     }
   };
 
-  const handleResetPostForCampaign = async (campaignId: string, postId: string) => {
+  const handleUpdatePostStatusForCampaign = async (
+    campaignId: string,
+    postId: string,
+    status: PostApprovalStatus
+  ) => {
     setWorkspaceError('');
     try {
-      await api.resetPostToInReview(campaignId, postId);
+      await api.updatePostStatus(campaignId, postId, status);
     } catch (err) {
-      setWorkspaceError(err instanceof Error ? err.message : 'Unable to reset status.');
+      setWorkspaceError(err instanceof Error ? err.message : 'Unable to update post status.');
+      throw err;
     }
+  };
+
+  const handleResetPostForCampaign = async (campaignId: string, postId: string) => {
+    await handleUpdatePostStatusForCampaign(campaignId, postId, 'in_review').catch(() => {});
   };
 
   const handleResetPostReview = async (postId: string) => {
@@ -1339,15 +1348,22 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
           <PendingApprovalsHub
             campaigns={campaigns}
             postsByCampaignId={postsByCampaignId}
+            searchQuery={campaignSearchQuery}
+            onBackToCalendar={() => openTab('campaigns')}
             onOpenCampaign={(cmpId) => {
               setSelectedCampaignId(cmpId);
               openTab('campaigns');
             }}
-            onInspectPost={(cmp, post) => {
-              setSelectedCampaignId(cmp.id);
-              setInspectedTarget({ campaignId: cmp.id, postId: post.id });
+            onCreateNewDraft={() => {
+              if (!activeCampaign) {
+                setShowNewCampaignModal(true);
+              } else {
+                openTab('campaigns');
+                setShowPostForm(true);
+              }
             }}
-            onResetToInReview={handleResetPostForCampaign}
+            onUpdatePostStatus={handleUpdatePostStatusForCampaign}
+            onSubmitReply={handleSubmitReplyForCampaign}
           />
         ) : activeTab === 'approved' ? (
           <ApprovedVaultView

@@ -1122,6 +1122,18 @@ describe('PostProof Firebase-Unified Billing, Quotas, Review Links & Image Isola
       assert.equal(updatedPost.title, 'Revised Post');
       assert.equal(updatedPost.channel, 'LinkedIn');
 
+      const creatorApprove = await jsonRequest(
+        srvUrl,
+        `/api/campaigns/${cmp.id}/posts/${createdPost.id}`,
+        {
+          method: 'PATCH',
+          token: 'token-creator-a',
+          body: { status: 'approved' },
+        }
+      );
+      assert.equal(creatorApprove.status, 200);
+      assert.equal((creatorApprove.data.post as { status: string }).status, 'approved');
+
       // 3. Self-serve account deletion requires DELETE confirmation & purges all data + auth user
       const badDeleteAcct = await jsonRequest(srvUrl, '/api/account', {
         method: 'DELETE',

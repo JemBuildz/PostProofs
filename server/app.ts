@@ -1031,8 +1031,12 @@ export function createApp(options: CreateAppOptions = {}): {
         ) {
           patch.scheduledDate = req.body.scheduledDate;
         }
-        if (req.body?.status === 'in_review') {
-          patch.status = 'in_review' as PostApprovalStatus;
+        if (
+          req.body?.status === 'in_review' ||
+          req.body?.status === 'approved' ||
+          req.body?.status === 'changes_requested'
+        ) {
+          patch.status = req.body.status as PostApprovalStatus;
         }
 
         const updated = await store.updatePost(campaign.activeReviewToken, existing.id, patch);

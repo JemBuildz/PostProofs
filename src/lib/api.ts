@@ -234,7 +234,7 @@ export const api = {
       caption?: string;
       channel?: string;
       scheduledDate?: string;
-      status?: 'in_review';
+      status?: PostApprovalStatus;
     }
   ) {
     return requestAuthedJson<{ post: ApiPost }>(
@@ -242,6 +242,16 @@ export const api = {
       {
         method: 'PATCH',
         body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  updatePostStatus(campaignId: string, postId: string, status: PostApprovalStatus) {
+    return requestAuthedJson<{ post: ApiPost }>(
+      `/api/campaigns/${encodeURIComponent(campaignId)}/posts/${encodeURIComponent(postId)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
       }
     );
   },
