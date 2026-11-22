@@ -519,9 +519,10 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
     setBillingNotice('');
     setHighlightedPlan(null);
     setInspectedTarget(null);
+    setSelectedCampaignId(null);
     setPostsByCampaignId({});
     await signOut(auth);
-    onNavigate('/app', { replace: true });
+    onNavigate('/', { replace: true });
   };
 
   const handleRefreshProfileAndUser = useCallback(async () => {
@@ -1200,10 +1201,11 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
             <button
               type="button"
               onClick={handleSignOut}
-              aria-label="Sign out"
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#E2E4F0] bg-white text-[#474A63] hover:border-[#C2B8FA] hover:text-[#5B42DC] cursor-pointer"
+              title="Sign out and return to home page"
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[#E2E4F0] bg-white px-2.5 text-xs font-semibold text-[#32344D] transition-colors hover:border-[#C2B8FA] hover:text-[#5B42DC] cursor-pointer"
             >
               <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+              Sign out
             </button>
           </div>
         </div>
