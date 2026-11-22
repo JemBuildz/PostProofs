@@ -1,4 +1,10 @@
-export type WorkspaceTab = 'campaigns' | 'pending' | 'billing' | 'settings';
+export type WorkspaceTab =
+  | 'campaigns'
+  | 'pending'
+  | 'approved'
+  | 'portals'
+  | 'billing'
+  | 'settings';
 
 /**
  * Maps workspace pathnames to the active creator workspace tab.
@@ -6,6 +12,8 @@ export type WorkspaceTab = 'campaigns' | 'pending' | 'billing' | 'settings';
 export function resolveWorkspaceTab(pathname: string): WorkspaceTab {
   const normalized = pathname.replace(/\/+$/, '') || '/';
   if (normalized === '/app/pending') return 'pending';
+  if (normalized === '/app/approved') return 'approved';
+  if (normalized === '/app/portals') return 'portals';
   if (normalized === '/app/billing') return 'billing';
   if (normalized === '/app/settings') return 'settings';
   return 'campaigns';

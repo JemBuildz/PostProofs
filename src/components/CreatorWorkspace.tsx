@@ -2,24 +2,31 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { onAuthStateChanged, sendEmailVerification, signInWithPopup, signOut } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import {
+  Building2,
+  Calendar,
   Check,
+  CheckCircle2,
   Clock,
   Copy,
   CreditCard,
   ExternalLink,
   Eye,
+  FolderPlus,
   ImageOff,
   Link2,
   Link2Off,
   LogOut,
   MailWarning,
+  Menu,
   MessageSquare,
   Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   Send,
   Settings,
+  Share2,
   Trash2,
   Upload,
   X,
@@ -37,6 +44,8 @@ import type { WorkspaceTab } from '../lib/workspaceState';
 import { auth, googleProvider } from '../lib/firebase';
 import postproofsLogo from '../assets/images/postproofs_logo.png';
 import { WorkspaceSettings } from './WorkspaceSettings';
+import { ApprovedVaultView } from './ApprovedVaultView';
+import { ClientPortalsView } from './ClientPortalsView';
 import {
   CampaignBatchFooterBar,
   CampaignViewToolbar,
@@ -177,9 +186,11 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
     readStoredCampaignId
   );
   const [postsByCampaignId, setPostsByCampaignId] = useState<Record<string, FirebasePost[]>>({});
-  const [campaignViewMode, setCampaignViewMode] = useState<CampaignViewMode>('list');
+  const [campaignViewMode, setCampaignViewMode] = useState<CampaignViewMode>('week');
   const [campaignChannelFilter, setCampaignChannelFilter] = useState('All');
   const [campaignSearchQuery, setCampaignSearchQuery] = useState('');
+  const [showNewCampaignModal, setShowNewCampaignModal] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [inspectedTarget, setInspectedTarget] = useState<{
     campaignId: string;
     postId: string;
@@ -202,11 +213,16 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
       const target =
         tab === 'pending'
           ? '/app/pending'
-          : tab === 'billing'
-            ? '/app/billing'
-            : tab === 'settings'
-              ? '/app/settings'
-              : '/app';
+          : tab === 'approved'
+            ? '/app/approved'
+            : tab === 'portals'
+              ? '/app/portals'
+              : tab === 'billing'
+                ? '/app/billing'
+                : tab === 'settings'
+                  ? '/app/settings'
+                  : '/app';
+      setMobileNavOpen(false);
       onNavigate(target, options);
     },
     [onNavigate]
@@ -548,6 +564,7 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
       setNewCampaignName('');
       setNewClientName('');
       setSelectedCampaignId(res.campaign.id);
+      setShowNewCampaignModal(false);
       setShowPostForm(true);
       void refreshBillingStatus();
     } catch (err) {
@@ -673,12 +690,12 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
     }
   };
 
-  const handleRevokeLink = async () => {
-    if (!user || !activeCampaign) return;
+  const handleRevokeLinkById = async (campaignId: string) => {
+    if (!user) return;
     setLinkBusy(true);
     setWorkspaceError('');
     try {
-      await api.revokeReviewLink(activeCampaign.id);
+      await api.revokeReviewLink(campaignId);
       setConfirmLinkAction(null);
     } catch (err) {
       setWorkspaceError(err instanceof Error ? err.message : 'Unable to revoke link.');
@@ -687,18 +704,28 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
     }
   };
 
-  const handleRotateLink = async () => {
-    if (!user || !activeCampaign) return;
+  const handleRotateLinkById = async (campaignId: string) => {
+    if (!user) return;
     setLinkBusy(true);
     setWorkspaceError('');
     try {
-      await api.regenerateReviewLink(activeCampaign.id);
+      await api.regenerateReviewLink(campaignId);
       setConfirmLinkAction(null);
     } catch (err) {
       setWorkspaceError(err instanceof Error ? err.message : 'Unable to generate a new link.');
     } finally {
       setLinkBusy(false);
     }
+  };
+
+  const handleRevokeLink = async () => {
+    if (!activeCampaign) return;
+    await handleRevokeLinkById(activeCampaign.id);
+  };
+
+  const handleRotateLink = async () => {
+    if (!activeCampaign) return;
+    await handleRotateLinkById(activeCampaign.id);
   };
 
   const handleDeleteCampaign = async () => {
@@ -936,95 +963,313 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
 
   // ==================== AUTHENTICATED CREATOR WORKSPACE ====================
   return (
-    <div className="min-h-screen bg-[#FAFBFD] text-[#1C1D33]">
-      {/* Strict 3-Zone Top Bar */}
-      <header className="sticky top-0 z-30 border-b border-[#ECEDF4] bg-white">
-        <div className="mx-auto flex min-h-[68px] max-w-[1280px] flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-2 sm:flex-nowrap sm:gap-8 sm:px-6 sm:py-0">
-          <button
-            type="button"
-            onClick={() => openTab('campaigns')}
-            aria-label="PostProofs workspace"
-            className="inline-flex items-center whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <img
-              src={postproofsLogo}
-              alt="postproofs"
-              className="h-10 w-auto object-contain sm:h-12"
-            />
-          </button>
+    <div className="flex min-h-screen bg-[#FAFBFD] text-[#1C1D33]">
+      {/* Mobile Sidebar Backdrop */}
+      {mobileNavOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-[#1C1D33]/40 lg:hidden"
+          onClick={() => setMobileNavOpen(false)}
+          aria-hidden="true"
+        />
+      )}
 
-          <nav className="flex items-center gap-4 sm:gap-6" aria-label="Workspace navigation">
+      {/* Stitch Persistent Left App Sidebar */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col justify-between border-r border-[#ECEDF4] bg-white transition-transform duration-200 lg:static lg:translate-x-0 ${
+          mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <div className="space-y-5 p-4">
+          {/* Brand Logo */}
+          <div className="flex items-center justify-between px-1 pt-1">
+            <button
+              type="button"
+              onClick={() => openTab('campaigns')}
+              aria-label="PostProofs workspace"
+              className="inline-flex items-center whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <img
+                src={postproofsLogo}
+                alt="postproofs"
+                className="h-10 w-auto object-contain"
+              />
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen(false)}
+              aria-label="Close navigation menu"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#555870] hover:bg-[#F4F5FA] lg:hidden cursor-pointer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          {/* Workspace / Active Campaign Switcher Card */}
+          <div className="rounded-2xl border border-[#ECEDF4] bg-[#FAFBFD] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-[#7D8099]">
+                Campaign workspace
+              </span>
+              {billingStatus && (
+                <button
+                  type="button"
+                  onClick={() => openTab('billing')}
+                  className="font-mono text-[10px] font-semibold text-[#5B42DC] hover:underline cursor-pointer"
+                >
+                  {billingStatus.usage.campaignsCount}/{billingStatus.entitlements.maxCampaigns}
+                </button>
+              )}
+            </div>
+
+            {campaigns.length > 0 ? (
+              <div className="mt-2">
+                <label htmlFor="sidebar-campaign-switcher" className="sr-only">
+                  Select active campaign
+                </label>
+                <select
+                  id="sidebar-campaign-switcher"
+                  value={selectedCampaignId || ''}
+                  onChange={(e) => {
+                    setSelectedCampaignId(e.target.value);
+                    if (activeTab !== 'campaigns') openTab('campaigns');
+                  }}
+                  className="h-9 w-full rounded-xl border border-[#DCDEEB] bg-white px-2.5 text-xs font-semibold text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                >
+                  {campaigns.map((cmp) => (
+                    <option key={cmp.id} value={cmp.id}>
+                      {cmp.clientName} · {cmp.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <p className="mt-1.5 text-xs font-medium text-[#5B5E77]">No campaigns created yet</p>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setCampaignError('');
+                setShowNewCampaignModal(true);
+                setMobileNavOpen(false);
+              }}
+              className="mt-2.5 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-xl border border-[#D8D3FA] bg-white text-xs font-semibold text-[#5B42DC] hover:bg-[#F6F4FF] cursor-pointer"
+            >
+              <FolderPlus className="h-3.5 w-3.5" aria-hidden="true" />
+              New campaign
+            </button>
+          </div>
+
+          {/* Primary Stitch Navigation Menu */}
+          <nav className="space-y-1" aria-label="Workspace navigation">
             <button
               type="button"
               onClick={() => openTab('campaigns')}
               aria-current={activeTab === 'campaigns' ? 'page' : undefined}
-              className={`text-sm whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+              className={`flex w-full items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-colors cursor-pointer ${
                 activeTab === 'campaigns'
-                  ? 'font-semibold text-[#5B42DC]'
-                  : 'font-medium text-[#555870] hover:text-[#1C1D33]'
+                  ? 'bg-[#5B42DC] text-white shadow-xs'
+                  : 'text-[#474A63] hover:bg-[#F4F5FA] hover:text-[#1C1D33]'
               }`}
             >
-              Campaigns
+              <span className="inline-flex items-center gap-2.5">
+                <Calendar className="h-4 w-4" aria-hidden="true" />
+                Calendar Proofs
+              </span>
             </button>
+
             <button
               type="button"
               onClick={() => openTab('pending')}
               aria-current={activeTab === 'pending' ? 'page' : undefined}
-              className={`inline-flex items-center gap-1.5 text-sm whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+              className={`flex w-full items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-colors cursor-pointer ${
                 activeTab === 'pending'
-                  ? 'font-semibold text-[#5B42DC]'
-                  : 'font-medium text-[#555870] hover:text-[#1C1D33]'
+                  ? 'bg-[#5B42DC] text-white shadow-xs'
+                  : 'text-[#474A63] hover:bg-[#F4F5FA] hover:text-[#1C1D33]'
               }`}
             >
-              Pending review
+              <span className="inline-flex items-center gap-2.5">
+                <Clock className="h-4 w-4" aria-hidden="true" />
+                Pending Review
+              </span>
               {totalPendingCount > 0 && (
-                <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-[#EAE6FF] px-1.5 py-0.5 font-mono text-[11px] font-bold text-[#4931C2]">
+                <span
+                  className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 font-mono text-[11px] font-bold ${
+                    activeTab === 'pending'
+                      ? 'bg-white/20 text-white'
+                      : 'bg-[#FEECEB] text-[#C0382B]'
+                  }`}
+                >
                   {totalPendingCount}
                 </span>
               )}
             </button>
+
+            <button
+              type="button"
+              onClick={() => openTab('approved')}
+              aria-current={activeTab === 'approved' ? 'page' : undefined}
+              className={`flex w-full items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-colors cursor-pointer ${
+                activeTab === 'approved'
+                  ? 'bg-[#5B42DC] text-white shadow-xs'
+                  : 'text-[#474A63] hover:bg-[#F4F5FA] hover:text-[#1C1D33]'
+              }`}
+            >
+              <span className="inline-flex items-center gap-2.5">
+                <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                Approved Vault
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openTab('portals')}
+              aria-current={activeTab === 'portals' ? 'page' : undefined}
+              className={`flex w-full items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-colors cursor-pointer ${
+                activeTab === 'portals'
+                  ? 'bg-[#5B42DC] text-white shadow-xs'
+                  : 'text-[#474A63] hover:bg-[#F4F5FA] hover:text-[#1C1D33]'
+              }`}
+            >
+              <span className="inline-flex items-center gap-2.5">
+                <Building2 className="h-4 w-4" aria-hidden="true" />
+                Client Portals
+              </span>
+            </button>
+
+            <div className="my-2 border-t border-[#ECEDF4] pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  openTab('billing');
+                  void refreshBillingStatus();
+                }}
+                aria-current={activeTab === 'billing' ? 'page' : undefined}
+                className={`flex w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-colors cursor-pointer ${
+                  activeTab === 'billing'
+                    ? 'bg-[#5B42DC] text-white shadow-xs'
+                    : 'text-[#474A63] hover:bg-[#F4F5FA] hover:text-[#1C1D33]'
+                }`}
+              >
+                <CreditCard className="h-4 w-4" aria-hidden="true" />
+                Billing
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openTab('settings')}
+                aria-current={activeTab === 'settings' ? 'page' : undefined}
+                className={`mt-1 flex w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-colors cursor-pointer ${
+                  activeTab === 'settings'
+                    ? 'bg-[#5B42DC] text-white shadow-xs'
+                    : 'text-[#474A63] hover:bg-[#F4F5FA] hover:text-[#1C1D33]'
+                }`}
+              >
+                <Settings className="h-4 w-4" aria-hidden="true" />
+                Settings
+              </button>
+            </div>
+          </nav>
+        </div>
+
+        {/* Bottom Live Status & User Strip */}
+        <div className="space-y-3 border-t border-[#ECEDF4] p-4">
+          <div className="flex items-center justify-between rounded-xl border border-[#E5E6F0] bg-[#FAFBFD] px-3 py-2 text-xs">
+            <span className="inline-flex items-center gap-2 font-medium text-[#23253E]">
+              <span className="h-2 w-2 rounded-full bg-[#1E6F4A]" aria-hidden="true" />
+              Client Sync Live
+            </span>
+            <span className="font-mono text-[10px] font-semibold text-[#5B42DC]">Live</span>
+          </div>
+          <div className="flex items-center justify-between gap-2 px-1">
+            <div className="min-w-0">
+              <p className="truncate text-xs font-semibold text-[#1C1D33]">
+                {user.displayName || 'Creator'}
+              </p>
+              <p className="truncate text-[11px] text-[#7D8099]">{user.email}</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              aria-label="Sign out"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#E2E4F0] bg-white text-[#474A63] hover:border-[#C2B8FA] hover:text-[#5B42DC] cursor-pointer"
+            >
+              <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content Shell */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Top Utility Header matching Stitch Screens */}
+        <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-3 border-b border-[#ECEDF4] bg-white px-4 sm:px-6">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Open workspace navigation"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#E2E4F0] bg-white text-[#23253E] lg:hidden cursor-pointer"
+            >
+              <Menu className="h-4 w-4" aria-hidden="true" />
+            </button>
+
+            <div className="relative w-full max-w-sm">
+              <Search
+                className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-[#8E91A8]"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                aria-label="Search posts, proofs, captions"
+                value={campaignSearchQuery}
+                onChange={(e) => setCampaignSearchQuery(e.target.value)}
+                placeholder="Search posts, proofs, captions…"
+                className="h-9 w-full rounded-xl border border-[#E2E4F0] bg-[#FAFBFD] pr-3 pl-9 text-xs text-[#1C1D33] placeholder:text-[#8E91A8] focus:border-[#5B42DC] focus:bg-white focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {activeCampaign && !activeCampaign.reviewLinkRevoked && (
+              <button
+                type="button"
+                onClick={() => handleCopyReviewLink(activeCampaign.activeReviewToken)}
+                className="hidden h-9 items-center gap-1.5 rounded-xl border border-[#DCDEEB] bg-white px-3 text-xs font-semibold text-[#23253E] transition-colors hover:border-[#5B42DC] hover:text-[#5B42DC] sm:inline-flex cursor-pointer"
+              >
+                {copiedToken ? (
+                  <>
+                    <Check className="h-3.5 w-3.5 text-[#1E6F4A]" aria-hidden="true" />
+                    Copied proof link
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    Share proof batch
+                  </>
+                )}
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => {
-                openTab('billing');
-                void refreshBillingStatus();
+                if (!activeCampaign) {
+                  setShowNewCampaignModal(true);
+                } else {
+                  if (activeTab !== 'campaigns') openTab('campaigns');
+                  setShowPostForm(true);
+                }
               }}
-              aria-current={activeTab === 'billing' ? 'page' : undefined}
-              className={`text-sm whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
-                activeTab === 'billing'
-                  ? 'font-semibold text-[#5B42DC]'
-                  : 'font-medium text-[#555870] hover:text-[#1C1D33]'
-              }`}
+              className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#5B42DC] px-3.5 text-xs font-semibold text-white transition-colors hover:bg-[#4931C2] cursor-pointer"
             >
-              Billing
+              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+              {activeCampaign ? 'New post draft' : 'New campaign'}
             </button>
-            <button
-              type="button"
-              onClick={() => openTab('settings')}
-              aria-current={activeTab === 'settings' ? 'page' : undefined}
-              className={`inline-flex items-center gap-1.5 text-sm whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
-                activeTab === 'settings'
-                  ? 'font-semibold text-[#5B42DC]'
-                  : 'font-medium text-[#555870] hover:text-[#1C1D33]'
-              }`}
-            >
-              <Settings className="h-3.5 w-3.5" aria-hidden="true" />
-              Settings
-            </button>
-          </nav>
+          </div>
+        </header>
 
-          <button
-            type="button"
-            onClick={handleSignOut}
-            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#E2E4F0] bg-white px-3 text-xs font-semibold text-[#32344D] transition-colors hover:border-[#C2B8FA] hover:text-[#5B42DC] whitespace-nowrap shrink-0 cursor-pointer sm:px-3.5"
-          >
-            <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
-            Sign out
-          </button>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-[1280px] px-4 py-8 sm:px-6">
+        <main className="mx-auto w-full max-w-[1360px] flex-1 px-4 py-7 sm:px-6">
         {!user.emailVerified && (
           <div
             role="status"
@@ -1103,6 +1348,32 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
               setInspectedTarget({ campaignId: cmp.id, postId: post.id });
             }}
             onResetToInReview={handleResetPostForCampaign}
+          />
+        ) : activeTab === 'approved' ? (
+          <ApprovedVaultView
+            campaigns={campaigns}
+            postsByCampaignId={postsByCampaignId}
+            searchQuery={campaignSearchQuery}
+            onOpenCampaign={(cmpId) => {
+              setSelectedCampaignId(cmpId);
+              openTab('campaigns');
+            }}
+            onInspectPost={(cmp, post) => {
+              setSelectedCampaignId(cmp.id);
+              setInspectedTarget({ campaignId: cmp.id, postId: post.id });
+            }}
+          />
+        ) : activeTab === 'portals' ? (
+          <ClientPortalsView
+            campaigns={campaigns}
+            postsByCampaignId={postsByCampaignId}
+            onOpenCampaign={(cmpId) => {
+              setSelectedCampaignId(cmpId);
+              openTab('campaigns');
+            }}
+            onCreateCampaign={() => setShowNewCampaignModal(true)}
+            onRevokeLink={handleRevokeLinkById}
+            onRotateLink={handleRotateLinkById}
           />
         ) : activeTab === 'billing' ? (
           /* ==================== BILLING VIEW (STRIPE TEST MODE + FIREBASE UID) ==================== */
@@ -1325,106 +1596,55 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
             )}
           </section>
         ) : (
-          /* ==================== CAMPAIGNS & APPROVALS VIEW ==================== */
-          <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
-            {/* Left Column: Campaigns & New Campaign Form */}
-            <aside className="space-y-6 lg:col-span-4">
-              <div className="rounded-2xl border border-[#E2E4F0] bg-white p-5">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-medium text-[#6E718A]">
-                      {user.displayName || user.email}
-                    </p>
-                    <h1 className="mt-0.5 text-lg font-bold text-[#1C1D33]">Your campaigns</h1>
-                  </div>
-                  {billingStatus && (
-                    <button
-                      type="button"
-                      onClick={() => openTab('billing')}
-                      className="text-right font-mono text-[11px] font-semibold text-[#5B42DC] hover:underline shrink-0 cursor-pointer"
-                    >
-                      {billingStatus.usage.campaignsCount}/{billingStatus.entitlements.maxCampaigns}
-                    </button>
-                  )}
-                </div>
+          /* ==================== CALENDAR PROOFS FULL-WIDTH STAGE ==================== */
+          <section className="space-y-6">
+            {!activeCampaign ? (
+              <div className="mx-auto max-w-xl rounded-3xl border border-[#E2E4F0] bg-white p-8">
+                <p className="text-xs font-semibold text-[#5B42DC]">Get started</p>
+                <h1 className="mt-1 text-2xl font-bold tracking-[-0.03em] text-[#1C1D33]">
+                  Create your first campaign
+                </h1>
+                <p className="mt-1.5 text-sm text-[#5B5E77]">
+                  Name your campaign and client to unlock the Calendar Week Grid, Kanban board, and
+                  your private tokenized client portal link.
+                </p>
 
-                {campaigns.length === 0 ? (
-                  <p className="mt-4 text-sm text-[#646780]">
-                    Create your first campaign below to add posts and generate a private client
-                    review link.
-                  </p>
-                ) : (
-                  <div className="mt-4 space-y-2">
-                    {campaigns.map((cmp) => {
-                      const isSelected = cmp.id === selectedCampaignId;
-                      return (
-                        <button
-                          key={cmp.id}
-                          type="button"
-                          onClick={() => setSelectedCampaignId(cmp.id)}
-                          className={`w-full rounded-xl border p-3.5 text-left transition-colors cursor-pointer ${
-                            isSelected
-                              ? 'border-[#5B42DC] bg-[#F7F5FF]'
-                              : 'border-[#ECEDF4] bg-[#FAFBFD] hover:border-[#D3D6E6]'
-                          }`}
-                        >
-                          <div className="flex items-baseline justify-between gap-2">
-                            <span className="truncate text-sm font-semibold text-[#1C1D33]">
-                              {cmp.name}
-                            </span>
-                            <span
-                              className={`text-[11px] font-semibold shrink-0 ${
-                                cmp.reviewLinkRevoked ? 'text-[#9A5B0A]' : 'text-[#1E6F4A]'
-                              }`}
-                            >
-                              {cmp.reviewLinkRevoked ? 'Revoked' : 'Active'}
-                            </span>
-                          </div>
-                          <p className="mt-1 truncate text-xs text-[#6E718A]">{cmp.clientName}</p>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+                <form onSubmit={handleCreateCampaign} className="mt-6 space-y-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="cmp-name" className="block text-xs font-semibold text-[#474A63]">
+                        Campaign name
+                      </label>
+                      <input
+                        id="cmp-name"
+                        type="text"
+                        required
+                        maxLength={120}
+                        value={newCampaignName}
+                        onChange={(e) => setNewCampaignName(e.target.value)}
+                        placeholder="Spring launch · Week 2"
+                        className="mt-1 h-10 w-full rounded-xl border border-[#DCDEEB] px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                      />
+                    </div>
 
-              {/* New Campaign Form */}
-              <div className="rounded-2xl border border-[#E2E4F0] bg-white p-5">
-                <h2 className="text-sm font-bold text-[#1C1D33]">New campaign</h2>
-                <form onSubmit={handleCreateCampaign} className="mt-3.5 space-y-3">
-                  <div>
-                    <label htmlFor="cmp-name" className="block text-xs font-semibold text-[#474A63]">
-                      Campaign name
-                    </label>
-                    <input
-                      id="cmp-name"
-                      type="text"
-                      required
-                      maxLength={120}
-                      value={newCampaignName}
-                      onChange={(e) => setNewCampaignName(e.target.value)}
-                      placeholder="Spring launch · Week 2"
-                      className="mt-1 h-10 w-full rounded-xl border border-[#DCDEEB] px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="cmp-client"
-                      className="block text-xs font-semibold text-[#474A63]"
-                    >
-                      Client name
-                    </label>
-                    <input
-                      id="cmp-client"
-                      type="text"
-                      required
-                      maxLength={120}
-                      value={newClientName}
-                      onChange={(e) => setNewClientName(e.target.value)}
-                      placeholder="Solstice Home"
-                      className="mt-1 h-10 w-full rounded-xl border border-[#DCDEEB] px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
-                    />
+                    <div>
+                      <label
+                        htmlFor="cmp-client"
+                        className="block text-xs font-semibold text-[#474A63]"
+                      >
+                        Client name
+                      </label>
+                      <input
+                        id="cmp-client"
+                        type="text"
+                        required
+                        maxLength={120}
+                        value={newClientName}
+                        onChange={(e) => setNewClientName(e.target.value)}
+                        placeholder="Solstice Home"
+                        className="mt-1 h-10 w-full rounded-xl border border-[#DCDEEB] px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                      />
+                    </div>
                   </div>
 
                   {campaignError && (
@@ -1439,7 +1659,7 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                           onClick={() => openTab('billing')}
                           className="mt-2 font-semibold text-[#5B42DC] underline cursor-pointer"
                         >
-                          View plans & upgrade
+                          View plans &amp; upgrade
                         </button>
                       )}
                     </div>
@@ -1448,111 +1668,115 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                   <button
                     type="submit"
                     disabled={campaignBusy}
-                    className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-xl bg-[#5B42DC] text-xs font-semibold text-white transition-colors hover:bg-[#4931C2] disabled:opacity-50 cursor-pointer"
+                    className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl bg-[#5B42DC] px-5 text-xs font-semibold text-white transition-colors hover:bg-[#4931C2] disabled:opacity-50 cursor-pointer"
                   >
                     <Plus className="h-3.5 w-3.5" aria-hidden="true" />
                     {campaignBusy ? 'Creating…' : 'Create campaign'}
                   </button>
                 </form>
               </div>
-            </aside>
-
-            {/* Right Column: Selected Campaign, Private Revocable Link & Posts */}
-            <section className="space-y-6 lg:col-span-8">
-              {!activeCampaign ? (
-                <div className="rounded-2xl border border-[#E2E4F0] bg-white p-10 text-center">
-                  <h2 className="text-xl font-bold text-[#1C1D33]">No campaign selected</h2>
-                  <p className="mt-2 text-sm text-[#5B5E77]">
-                    Create a campaign on the left to add posts manually and share a private review
-                    link with your client.
-                  </p>
-                </div>
-              ) : (
-                <>
-                  {/* Campaign Header + Private Revocable Client Link */}
-                  <div className="rounded-2xl border border-[#E2E4F0] bg-white p-6">
-                    {editingCampaign ? (
-                      <form onSubmit={handleSaveCampaignEdit} className="space-y-4">
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                          <div>
-                            <label
-                              htmlFor="edit-cmp-name"
-                              className="block text-xs font-semibold text-[#474A63]"
-                            >
-                              Campaign name
-                            </label>
-                            <input
-                              id="edit-cmp-name"
-                              type="text"
-                              required
-                              minLength={2}
-                              maxLength={120}
-                              value={editCampaignName}
-                              onChange={(e) => setEditCampaignName(e.target.value)}
-                              className="mt-1 h-10 w-full rounded-xl border border-[#DCDEEB] px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
-                            />
-                          </div>
-                          <div>
-                            <label
-                              htmlFor="edit-cmp-client"
-                              className="block text-xs font-semibold text-[#474A63]"
-                            >
-                              Client name
-                            </label>
-                            <input
-                              id="edit-cmp-client"
-                              type="text"
-                              required
-                              minLength={2}
-                              maxLength={120}
-                              value={editClientName}
-                              onChange={(e) => setEditClientName(e.target.value)}
-                              className="mt-1 h-10 w-full rounded-xl border border-[#DCDEEB] px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
-                            />
-                          </div>
+            ) : (
+              <>
+                {/* Stitch Breadcrumb + Campaign Title + Summary Pills + Private Client Portal Controls */}
+                <div className="rounded-2xl border border-[#E2E4F0] bg-white p-6">
+                  {editingCampaign ? (
+                    <form onSubmit={handleSaveCampaignEdit} className="space-y-4">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label
+                            htmlFor="edit-cmp-name"
+                            className="block text-xs font-semibold text-[#474A63]"
+                          >
+                            Campaign name
+                          </label>
+                          <input
+                            id="edit-cmp-name"
+                            type="text"
+                            required
+                            minLength={2}
+                            maxLength={120}
+                            value={editCampaignName}
+                            onChange={(e) => setEditCampaignName(e.target.value)}
+                            className="mt-1 h-10 w-full rounded-xl border border-[#DCDEEB] px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                          />
                         </div>
-                        <div className="flex items-center justify-end gap-2">
+                        <div>
+                          <label
+                            htmlFor="edit-cmp-client"
+                            className="block text-xs font-semibold text-[#474A63]"
+                          >
+                            Client name
+                          </label>
+                          <input
+                            id="edit-cmp-client"
+                            type="text"
+                            required
+                            minLength={2}
+                            maxLength={120}
+                            value={editClientName}
+                            onChange={(e) => setEditClientName(e.target.value)}
+                            className="mt-1 h-10 w-full rounded-xl border border-[#DCDEEB] px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          disabled={editCampaignBusy}
+                          onClick={() => setEditingCampaign(false)}
+                          className="h-9 rounded-xl border border-[#DCDEEB] bg-white px-3.5 text-xs font-semibold text-[#474A63] hover:text-[#1C1D33] cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={editCampaignBusy}
+                          className="h-9 rounded-xl bg-[#5B42DC] px-4 text-xs font-semibold text-white hover:bg-[#4931C2] disabled:opacity-50 cursor-pointer"
+                        >
+                          {editCampaignBusy ? 'Saving…' : 'Save campaign'}
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-[#6B6E87]">
+                          <span>Campaigns</span>
+                          <span>&rsaquo;</span>
+                          <span className="rounded-full bg-[#EAE6FF] px-2.5 py-0.5 font-semibold text-[#4931C2]">
+                            {activeCampaign.clientName}
+                          </span>
+                        </div>
+                        <div className="mt-1.5 flex items-center gap-2">
+                          <h1 className="text-2xl font-bold tracking-[-0.03em] text-[#1C1D33] sm:text-3xl">
+                            {activeCampaign.name}
+                          </h1>
                           <button
                             type="button"
-                            disabled={editCampaignBusy}
-                            onClick={() => setEditingCampaign(false)}
-                            className="h-9 rounded-xl border border-[#DCDEEB] bg-white px-3.5 text-xs font-semibold text-[#474A63] hover:text-[#1C1D33] cursor-pointer"
+                            onClick={startEditingCampaign}
+                            aria-label="Edit campaign details"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#ECEDF4] text-[#6E718A] transition-colors hover:border-[#C2B8FA] hover:text-[#5B42DC] cursor-pointer"
                           >
-                            Cancel
-                          </button>
-                          <button
-                            type="submit"
-                            disabled={editCampaignBusy}
-                            className="h-9 rounded-xl bg-[#5B42DC] px-4 text-xs font-semibold text-white hover:bg-[#4931C2] disabled:opacity-50 cursor-pointer"
-                          >
-                            {editCampaignBusy ? 'Saving…' : 'Save campaign'}
+                            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                           </button>
                         </div>
-                      </form>
-                    ) : (
-                      <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div>
-                          <p className="text-xs font-semibold text-[#5B42DC]">
-                            Client · {activeCampaign.clientName}
-                          </p>
-                          <div className="mt-1 flex items-center gap-2">
-                            <h2 className="text-2xl font-bold tracking-[-0.03em] text-[#1C1D33]">
-                              {activeCampaign.name}
-                            </h2>
-                            <button
-                              type="button"
-                              onClick={startEditingCampaign}
-                              aria-label="Edit campaign details"
-                              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#ECEDF4] text-[#6E718A] transition-colors hover:border-[#C2B8FA] hover:text-[#5B42DC] cursor-pointer"
-                            >
-                              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                            </button>
-                          </div>
-                          <p className="mt-1.5 font-mono text-xs tabular-nums text-[#5D607A]">
-                            {approvedCount} approved · {changesCount} needs changes ·{' '}
-                            {inReviewCount} awaiting review
-                          </p>
+
+                        {/* Stitch Status Counter Badges */}
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <span className="rounded-full border border-[#E2E4F0] bg-[#FAFBFD] px-3 py-1 font-mono text-xs font-semibold text-[#1C1D33]">
+                            Total Posts: {posts.length}
+                          </span>
+                          <span className="rounded-full bg-[#EDF8F2] px-3 py-1 font-mono text-xs font-semibold text-[#1E6F4A]">
+                            Approved: {approvedCount}
+                          </span>
+                          <span className="rounded-full bg-[#EEF0FA] px-3 py-1 font-mono text-xs font-semibold text-[#474A63]">
+                            In Review: {inReviewCount}
+                          </span>
+                          <span className="rounded-full bg-[#FEF4E6] px-3 py-1 font-mono text-xs font-semibold text-[#9A5B0A]">
+                            Changes Requested: {changesCount}
+                          </span>
                         </div>
+                      </div>
 
                         <div className="flex flex-wrap items-center gap-2 shrink-0">
                           <button
@@ -1946,30 +2170,19 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                     </div>
                   )}
 
-                  {/* View Switcher & Channel Filter */}
-                  {posts.length > 0 && (
-                    <CampaignViewToolbar
-                      viewMode={campaignViewMode}
-                      onChangeViewMode={setCampaignViewMode}
-                      channelFilter={campaignChannelFilter}
-                      onChangeChannelFilter={setCampaignChannelFilter}
-                      channels={campaignChannels}
-                      searchQuery={campaignSearchQuery}
-                      onChangeSearchQuery={setCampaignSearchQuery}
-                    />
-                  )}
+                  {/* View Switcher & Channel Filter (always visible so Week Grid / Kanban / Feed are 1 click away) */}
+                  <CampaignViewToolbar
+                    viewMode={campaignViewMode}
+                    onChangeViewMode={setCampaignViewMode}
+                    channelFilter={campaignChannelFilter}
+                    onChangeChannelFilter={setCampaignChannelFilter}
+                    channels={campaignChannels}
+                    searchQuery={campaignSearchQuery}
+                    onChangeSearchQuery={setCampaignSearchQuery}
+                  />
 
                   {/* Creator View of Saved Post Statuses & Client Feedback */}
-                  {posts.length === 0 ? (
-                    <div className="rounded-2xl border border-[#E2E4F0] bg-white p-10 text-center">
-                      <p className="text-sm font-semibold text-[#1C1D33]">
-                        No posts in this campaign yet
-                      </p>
-                      <p className="mt-1 text-xs text-[#646780]">
-                        Click “Add post” to enter a post with its caption, channel, date, and image.
-                      </p>
-                    </div>
-                  ) : filteredPosts.length === 0 ? (
+                  {posts.length > 0 && filteredPosts.length === 0 ? (
                     <div className="rounded-2xl border border-[#E2E4F0] bg-white p-10 text-center">
                       <p className="text-sm font-semibold text-[#1C1D33]">
                         No posts match this filter
@@ -2008,6 +2221,16 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                       onResetToInReview={(postId) => void handleResetPostReview(postId)}
                       onAddPost={() => setShowPostForm(true)}
                     />
+                  ) : posts.length === 0 ? (
+                    <div className="rounded-2xl border border-[#E2E4F0] bg-white p-10 text-center">
+                      <p className="text-sm font-semibold text-[#1C1D33]">
+                        No posts in this campaign yet
+                      </p>
+                      <p className="mt-1 text-xs text-[#646780]">
+                        Click “New post draft” to enter a post with its caption, channel, date, and
+                        image.
+                      </p>
+                    </div>
                   ) : (
                     <div className="space-y-4">
                       {filteredPosts.map((post) => (
@@ -2289,10 +2512,111 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                   />
                 </>
               )}
-            </section>
-          </div>
+          </section>
         )}
-      </main>
+        </main>
+      </div>
+
+      {/* Create New Campaign Modal (opened from sidebar or Client Portals) */}
+      {showNewCampaignModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#1C1D33]/45 p-4 backdrop-blur-[2px]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-new-campaign-title"
+          onClick={() => setShowNewCampaignModal(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-[#E2E4F0] bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h2 id="modal-new-campaign-title" className="text-lg font-bold text-[#1C1D33]">
+                Create new campaign
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowNewCampaignModal(false)}
+                aria-label="Close modal"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#5D607A] hover:bg-[#F4F5FA] cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <form onSubmit={handleCreateCampaign} className="mt-4 space-y-3.5">
+              <div>
+                <label htmlFor="modal-cmp-name" className="block text-xs font-semibold text-[#474A63]">
+                  Campaign name
+                </label>
+                <input
+                  id="modal-cmp-name"
+                  type="text"
+                  required
+                  maxLength={120}
+                  value={newCampaignName}
+                  onChange={(e) => setNewCampaignName(e.target.value)}
+                  placeholder="Spring launch · Week 2"
+                  className="mt-1 h-10 w-full rounded-xl border border-[#DCDEEB] px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                />
+              </div>
+              <div>
+                <label htmlFor="modal-cmp-client" className="block text-xs font-semibold text-[#474A63]">
+                  Client name
+                </label>
+                <input
+                  id="modal-cmp-client"
+                  type="text"
+                  required
+                  maxLength={120}
+                  value={newClientName}
+                  onChange={(e) => setNewClientName(e.target.value)}
+                  placeholder="Solstice Home"
+                  className="mt-1 h-10 w-full rounded-xl border border-[#DCDEEB] px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                />
+              </div>
+
+              {campaignError && (
+                <div
+                  role="alert"
+                  className="rounded-xl border border-[#F0C8C4] bg-[#FDF4F3] p-3 text-xs font-medium text-[#9B2B22]"
+                >
+                  <p>{campaignError}</p>
+                  {campaignUpgradePrompt && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowNewCampaignModal(false);
+                        openTab('billing');
+                      }}
+                      className="mt-2 font-semibold text-[#5B42DC] underline cursor-pointer"
+                    >
+                      View plans &amp; upgrade
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowNewCampaignModal(false)}
+                  className="h-9 rounded-xl border border-[#DCDEEB] bg-white px-4 text-xs font-semibold text-[#474A63] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={campaignBusy}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#5B42DC] px-4 text-xs font-semibold text-white hover:bg-[#4931C2] disabled:opacity-50 cursor-pointer"
+                >
+                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                  {campaignBusy ? 'Creating…' : 'Create campaign'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {inspectedCampaign && inspectedTarget && (
         <PostProofDetailModal

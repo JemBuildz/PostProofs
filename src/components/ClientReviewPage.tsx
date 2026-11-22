@@ -279,26 +279,50 @@ export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNav
                   </p>
                 </div>
 
-                {/* Progress Breakdown + Batch Approve Control */}
+                {/* Progress Breakdown Ring + Batch Approve Control */}
                 <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-[#E5E6F0] bg-[#FAFBFD] p-4 sm:flex-nowrap">
-                  <div className="min-w-[165px]">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-lg font-bold tracking-tight text-[#1C1D33]">
+                  <div className="flex items-center gap-3.5">
+                    <div className="relative flex h-14 w-14 shrink-0 items-center justify-center">
+                      <svg className="h-14 w-14 -rotate-90" viewBox="0 0 56 56" aria-hidden="true">
+                        <circle
+                          cx="28"
+                          cy="28"
+                          r="22"
+                          fill="none"
+                          stroke="#E5E6F0"
+                          strokeWidth="5"
+                        />
+                        <circle
+                          cx="28"
+                          cy="28"
+                          r="22"
+                          fill="none"
+                          stroke="#5B42DC"
+                          strokeWidth="5"
+                          strokeLinecap="round"
+                          strokeDasharray={2 * Math.PI * 22}
+                          strokeDashoffset={
+                            2 * Math.PI * 22 * (1 - Math.min(1, progressPct / 100))
+                          }
+                        />
+                      </svg>
+                      <span className="absolute font-mono text-xs font-bold text-[#1C1D33]">
                         {approvedCount}/{posts.length}
                       </span>
-                      <span className="font-mono text-xs font-semibold text-[#5B42DC]">
-                        {progressPct}% approved
-                      </span>
                     </div>
-                    <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-[#E5E6F0]">
-                      <div
-                        className="h-full rounded-full bg-[#1E6F4A] transition-all duration-300"
-                        style={{ width: `${progressPct}%` }}
-                      />
+
+                    <div className="space-y-0.5 text-[11px]">
+                      <p className="font-semibold text-[#1C1D33]">Progress Breakdown</p>
+                      <p className="font-medium text-[#1E6F4A]">
+                        ● {approvedCount} Approved
+                      </p>
+                      <p className="font-medium text-[#5B42DC]">
+                        ● {inReviewCount} Pending
+                      </p>
+                      <p className="font-medium text-[#9A5B0A]">
+                        ● {changesCount} Revision{changesCount === 1 ? '' : 's'}
+                      </p>
                     </div>
-                    <p className="mt-1.5 font-mono text-[11px] tabular-nums text-[#5D607A]">
-                      {inReviewCount} pending · {changesCount} revision{changesCount === 1 ? '' : 's'}
-                    </p>
                   </div>
 
                   {remainingUnapproved.length > 0 && (
