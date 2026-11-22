@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, sendEmailVerification, signInWithPopup, signOut } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import {
@@ -7,6 +7,7 @@ import {
   Copy,
   CreditCard,
   ExternalLink,
+  Eye,
   ImageOff,
   Link2,
   Link2Off,
@@ -36,6 +37,15 @@ import type { WorkspaceTab } from '../lib/workspaceState';
 import { auth, googleProvider } from '../lib/firebase';
 import postproofsLogo from '../assets/images/postproofs_logo.png';
 import { WorkspaceSettings } from './WorkspaceSettings';
+import {
+  CampaignBatchFooterBar,
+  CampaignViewToolbar,
+  KanbanBoardView,
+  WeekGridView,
+} from './CampaignProofViews';
+import type { CampaignViewMode } from './CampaignProofViews';
+import { PendingApprovalsHub } from './PendingApprovalsHub';
+import { PostProofDetailModal } from './PostProofDetailModal';
 import {
   ALLOWED_CHANNELS,
   subscribeCreatorBilling,
@@ -166,7 +176,14 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
   const [selectedCampaignId, setSelectedCampaignIdState] = useState<string | null>(
     readStoredCampaignId
   );
-  const [posts, setPosts] = useState<FirebasePost[]>([]);
+  const [postsByCampaignId, setPostsByCampaignId] = useState<Record<string, FirebasePost[]>>({});
+  const [campaignViewMode, setCampaignViewMode] = useState<CampaignViewMode>('list');
+  const [campaignChannelFilter, setCampaignChannelFilter] = useState('All');
+  const [campaignSearchQuery, setCampaignSearchQuery] = useState('');
+  const [inspectedTarget, setInspectedTarget] = useState<{
+    campaignId: string;
+    postId: string;
+  } | null>(null);
   const [workspaceError, setWorkspaceError] = useState('');
 
   const setSelectedCampaignId = useCallback(
@@ -183,7 +200,13 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
   const openTab = useCallback(
     (tab: WorkspaceTab, options?: { replace?: boolean }) => {
       const target =
-        tab === 'billing' ? '/app/billing' : tab === 'settings' ? '/app/settings' : '/app';
+        tab === 'pending'
+          ? '/app/pending'
+          : tab === 'billing'
+            ? '/app/billing'
+            : tab === 'settings'
+              ? '/app/settings'
+              : '/app';
       onNavigate(target, options);
     },
     [onNavigate]
@@ -350,7 +373,7 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
     if (!user) {
       setCampaigns([]);
       setSelectedCampaignId(null);
-      setPosts([]);
+      setPostsByCampaignId({});
       setBillingStatus(null);
       setBillingError('');
       setWorkspaceError('');
@@ -404,25 +427,62 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
     setConfirmLinkAction(null);
     setEditingPostId(null);
     setShowPostForm(false);
+    setCampaignChannelFilter('All');
+    setCampaignSearchQuery('');
     resetPostFormFields();
   }, [selectedCampaignId, resetPostFormFields]);
 
-  // Subscribe to posts & comments for the selected campaign's active review link
+  // Subscribe to posts & comments across all active campaign review links
+  // so both the selected campaign views and cross-campaign Pending Approvals Hub stay live.
   useEffect(() => {
-    if (!authReady || !user || !activeCampaign?.activeReviewToken) {
-      setPosts([]);
+    if (!authReady || !user || campaigns.length === 0) {
+      setPostsByCampaignId({});
       return;
     }
 
-    const unsub = subscribeCreatorCampaignPosts(
-      user.uid,
-      activeCampaign.activeReviewToken,
-      (items) => setPosts(items),
-      (err) => setWorkspaceError(err.message)
-    );
+    const activeIds = new Set(campaigns.map((c) => c.id));
+    setPostsByCampaignId((prev) => {
+      const pruned: Record<string, FirebasePost[]> = {};
+      for (const [id, list] of Object.entries(prev)) {
+        if (activeIds.has(id)) pruned[id] = list;
+      }
+      return pruned;
+    });
 
-    return () => unsub();
-  }, [authReady, user, activeCampaign?.activeReviewToken]);
+    const unsubs = campaigns
+      .filter((c) => Boolean(c.activeReviewToken))
+      .map((campaign) =>
+        subscribeCreatorCampaignPosts(
+          user.uid,
+          campaign.activeReviewToken,
+          (items) => {
+            setPostsByCampaignId((prev) => ({ ...prev, [campaign.id]: items }));
+          },
+          (err) => setWorkspaceError(err.message)
+        )
+      );
+
+    return () => {
+      for (const unsub of unsubs) unsub();
+    };
+  }, [authReady, user, campaigns]);
+
+  const posts = useMemo(
+    () => (activeCampaign ? (postsByCampaignId[activeCampaign.id] ?? []) : []),
+    [activeCampaign, postsByCampaignId]
+  );
+
+  const totalPendingCount = useMemo(() => {
+    let count = 0;
+    for (const c of campaigns) {
+      for (const p of postsByCampaignId[c.id] ?? []) {
+        if (p.status === 'in_review' || p.status === 'changes_requested') {
+          count += 1;
+        }
+      }
+    }
+    return count;
+  }, [campaigns, postsByCampaignId]);
 
   const handleGoogleSignIn = async () => {
     setAuthError('');
@@ -442,6 +502,8 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
     pendingStripeReturnRef.current = null;
     setBillingNotice('');
     setHighlightedPlan(null);
+    setInspectedTarget(null);
+    setPostsByCampaignId({});
     await signOut(auth);
     onNavigate('/app', { replace: true });
   };
@@ -672,13 +734,34 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
     }
   };
 
-  const handleResetPostReview = async (postId: string) => {
-    if (!activeCampaign) return;
+  const handleResetPostForCampaign = async (campaignId: string, postId: string) => {
     setWorkspaceError('');
     try {
-      await api.resetPostToInReview(activeCampaign.id, postId);
+      await api.resetPostToInReview(campaignId, postId);
     } catch (err) {
       setWorkspaceError(err instanceof Error ? err.message : 'Unable to reset status.');
+    }
+  };
+
+  const handleResetPostReview = async (postId: string) => {
+    if (!activeCampaign) return;
+    await handleResetPostForCampaign(activeCampaign.id, postId);
+  };
+
+  const handleSubmitReplyForCampaign = async (
+    campaignId: string,
+    postId: string,
+    body: string
+  ) => {
+    if (!user) return;
+    const trimmed = body.trim();
+    if (!trimmed) return;
+    setWorkspaceError('');
+    try {
+      await api.addCreatorComment(campaignId, postId, trimmed);
+    } catch (err) {
+      setWorkspaceError(err instanceof Error ? err.message : 'Unable to send reply.');
+      throw err;
     }
   };
 
@@ -687,14 +770,38 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
     if (!user || !activeCampaign) return;
     const body = (replyDrafts[postId] || '').trim();
     if (!body) return;
-    setWorkspaceError('');
     try {
-      await api.addCreatorComment(activeCampaign.id, postId, body);
+      await handleSubmitReplyForCampaign(activeCampaign.id, postId, body);
       setReplyDrafts((prev) => ({ ...prev, [postId]: '' }));
-    } catch (err) {
-      setWorkspaceError(err instanceof Error ? err.message : 'Unable to send reply.');
+    } catch {
+      // Error surfaced via workspaceError inside handleSubmitReplyForCampaign
     }
   };
+
+  const campaignChannels = useMemo(
+    () => Array.from(new Set(posts.map((p) => p.channel))),
+    [posts]
+  );
+
+  const filteredPosts = useMemo(() => {
+    const q = campaignSearchQuery.trim().toLowerCase();
+    return posts.filter((post) => {
+      if (campaignChannelFilter !== 'All' && post.channel !== campaignChannelFilter) return false;
+      if (!q) return true;
+      return (
+        post.title.toLowerCase().includes(q) ||
+        post.caption.toLowerCase().includes(q) ||
+        post.channel.toLowerCase().includes(q)
+      );
+    });
+  }, [posts, campaignChannelFilter, campaignSearchQuery]);
+
+  const inspectedCampaign = inspectedTarget
+    ? campaigns.find((c) => c.id === inspectedTarget.campaignId) ?? null
+    : null;
+  const inspectedPosts = inspectedCampaign
+    ? (postsByCampaignId[inspectedCampaign.id] ?? [])
+    : [];
 
   const handleCopyReviewLink = (token: string) => {
     const url = `${window.location.origin}/review/${token}`;
@@ -861,6 +968,23 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
             </button>
             <button
               type="button"
+              onClick={() => openTab('pending')}
+              aria-current={activeTab === 'pending' ? 'page' : undefined}
+              className={`inline-flex items-center gap-1.5 text-sm whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                activeTab === 'pending'
+                  ? 'font-semibold text-[#5B42DC]'
+                  : 'font-medium text-[#555870] hover:text-[#1C1D33]'
+              }`}
+            >
+              Pending review
+              {totalPendingCount > 0 && (
+                <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-[#EAE6FF] px-1.5 py-0.5 font-mono text-[11px] font-bold text-[#4931C2]">
+                  {totalPendingCount}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
               onClick={() => {
                 openTab('billing');
                 void refreshBillingStatus();
@@ -965,6 +1089,20 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
             }}
             onProfileUpdated={handleRefreshProfileAndUser}
             onAccountDeleted={handleSignOut}
+          />
+        ) : activeTab === 'pending' ? (
+          <PendingApprovalsHub
+            campaigns={campaigns}
+            postsByCampaignId={postsByCampaignId}
+            onOpenCampaign={(cmpId) => {
+              setSelectedCampaignId(cmpId);
+              openTab('campaigns');
+            }}
+            onInspectPost={(cmp, post) => {
+              setSelectedCampaignId(cmp.id);
+              setInspectedTarget({ campaignId: cmp.id, postId: post.id });
+            }}
+            onResetToInReview={handleResetPostForCampaign}
           />
         ) : activeTab === 'billing' ? (
           /* ==================== BILLING VIEW (STRIPE TEST MODE + FIREBASE UID) ==================== */
@@ -1808,6 +1946,19 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                     </div>
                   )}
 
+                  {/* View Switcher & Channel Filter */}
+                  {posts.length > 0 && (
+                    <CampaignViewToolbar
+                      viewMode={campaignViewMode}
+                      onChangeViewMode={setCampaignViewMode}
+                      channelFilter={campaignChannelFilter}
+                      onChangeChannelFilter={setCampaignChannelFilter}
+                      channels={campaignChannels}
+                      searchQuery={campaignSearchQuery}
+                      onChangeSearchQuery={setCampaignSearchQuery}
+                    />
+                  )}
+
                   {/* Creator View of Saved Post Statuses & Client Feedback */}
                   {posts.length === 0 ? (
                     <div className="rounded-2xl border border-[#E2E4F0] bg-white p-10 text-center">
@@ -1818,9 +1969,48 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                         Click “Add post” to enter a post with its caption, channel, date, and image.
                       </p>
                     </div>
+                  ) : filteredPosts.length === 0 ? (
+                    <div className="rounded-2xl border border-[#E2E4F0] bg-white p-10 text-center">
+                      <p className="text-sm font-semibold text-[#1C1D33]">
+                        No posts match this filter
+                      </p>
+                      <p className="mt-1 text-xs text-[#646780]">
+                        Clear your search or channel filter to view all posts in this campaign.
+                      </p>
+                    </div>
+                  ) : campaignViewMode === 'week' ? (
+                    <WeekGridView
+                      posts={filteredPosts}
+                      linkRevoked={activeCampaign.reviewLinkRevoked}
+                      onInspectPost={(post) =>
+                        setInspectedTarget({ campaignId: activeCampaign.id, postId: post.id })
+                      }
+                      onEditPost={(post) => {
+                        setCampaignViewMode('list');
+                        startEditingPost(post);
+                      }}
+                      onAddPostForDate={(isoDate) => {
+                        setPostDate(isoDate);
+                        setShowPostForm(true);
+                      }}
+                    />
+                  ) : campaignViewMode === 'kanban' ? (
+                    <KanbanBoardView
+                      posts={filteredPosts}
+                      linkRevoked={activeCampaign.reviewLinkRevoked}
+                      onInspectPost={(post) =>
+                        setInspectedTarget({ campaignId: activeCampaign.id, postId: post.id })
+                      }
+                      onEditPost={(post) => {
+                        setCampaignViewMode('list');
+                        startEditingPost(post);
+                      }}
+                      onResetToInReview={(postId) => void handleResetPostReview(postId)}
+                      onAddPost={() => setShowPostForm(true)}
+                    />
                   ) : (
                     <div className="space-y-4">
-                      {posts.map((post) => (
+                      {filteredPosts.map((post) => (
                         <article
                           key={post.id}
                           className="grid grid-cols-1 gap-5 rounded-2xl border border-[#E2E4F0] bg-white p-5 sm:grid-cols-12"
@@ -1952,6 +2142,20 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                                     <PostStatusText status={post.status} />
                                     <button
                                       type="button"
+                                      onClick={() =>
+                                        setInspectedTarget({
+                                          campaignId: activeCampaign.id,
+                                          postId: post.id,
+                                        })
+                                      }
+                                      aria-label={`Inspect ${post.title}`}
+                                      className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#ECEDF4] px-2.5 text-[11px] font-semibold text-[#474A63] transition-colors hover:border-[#C2B8FA] hover:text-[#5B42DC] cursor-pointer"
+                                    >
+                                      <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                                      Inspect
+                                    </button>
+                                    <button
+                                      type="button"
                                       onClick={() => startEditingPost(post)}
                                       aria-label={`Edit ${post.title}`}
                                       className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#ECEDF4] text-[#7D8099] transition-colors hover:border-[#C2B8FA] hover:text-[#5B42DC] cursor-pointer"
@@ -2076,12 +2280,39 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                       ))}
                     </div>
                   )}
+
+                  <CampaignBatchFooterBar
+                    campaign={activeCampaign}
+                    pendingCount={inReviewCount + changesCount}
+                    copiedToken={copiedToken}
+                    onCopyLink={() => handleCopyReviewLink(activeCampaign.activeReviewToken)}
+                  />
                 </>
               )}
             </section>
           </div>
         )}
       </main>
+
+      {inspectedCampaign && inspectedTarget && (
+        <PostProofDetailModal
+          campaign={inspectedCampaign}
+          posts={inspectedPosts}
+          activePostId={inspectedTarget.postId}
+          onSelectPost={(nextPostId) =>
+            setInspectedTarget({ campaignId: inspectedCampaign.id, postId: nextPostId })
+          }
+          onClose={() => setInspectedTarget(null)}
+          onEditPost={(post) => {
+            setSelectedCampaignId(inspectedCampaign.id);
+            openTab('campaigns');
+            setCampaignViewMode('list');
+            startEditingPost(post);
+          }}
+          onResetToInReview={handleResetPostForCampaign}
+          onSubmitReply={handleSubmitReplyForCampaign}
+        />
+      )}
     </div>
   );
 };

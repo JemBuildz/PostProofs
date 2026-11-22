@@ -165,9 +165,10 @@ export default function App() {
     );
   }
 
-  // Supported creator workspace routes: /app, /app/billing, and /app/settings
+  // Supported creator workspace routes: /app, /app/pending, /app/billing, and /app/settings
   if (
     normalized === '/app' ||
+    normalized === '/app/pending' ||
     normalized === '/app/billing' ||
     normalized === '/app/settings'
   ) {

@@ -1,12 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Check,
-  Clock,
-  ImageOff,
+  CheckCheck,
+  Copy,
   Lock,
   MessageSquare,
   RotateCcw,
   Send,
+  ShieldCheck,
   X,
 } from 'lucide-react';
 import {
@@ -21,65 +22,18 @@ import type {
   PostApprovalStatus,
 } from '../lib/firestoreRepo';
 import postproofsLogo from '../assets/images/postproofs_logo.png';
+import {
+  HighlightedCaption,
+  PostStatusBadge,
+  SocialPostMockup,
+} from './SocialPostMockup';
 
 interface ClientReviewPageProps {
   token: string;
   onNavigate: (path: string) => void;
 }
 
-function StatusLabel({ status }: { status: PostApprovalStatus }) {
-  if (status === 'approved') {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1E6F4A] whitespace-nowrap">
-        <Check className="h-3.5 w-3.5" aria-hidden="true" />
-        Approved
-      </span>
-    );
-  }
-  if (status === 'changes_requested') {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#9A5B0A] whitespace-nowrap">
-        <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-        Changes requested
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#555870] whitespace-nowrap">
-      <Clock className="h-3.5 w-3.5" aria-hidden="true" />
-      Awaiting review
-    </span>
-  );
-}
-
-function PostPreviewImage({ src, alt }: { src: string; alt: string }) {
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    setFailed(false);
-  }, [src]);
-
-  if (failed || !src) {
-    return (
-      <div className="flex aspect-[4/3] w-full flex-col items-center justify-center rounded-xl border border-[#E5E6F0] bg-[#F4F5FA] p-6 text-center text-[#6E718A]">
-        <ImageOff className="h-6 w-6" aria-hidden="true" />
-        <span className="mt-2 text-xs font-medium">Preview image unavailable</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex aspect-[4/3] w-full items-center justify-center overflow-hidden rounded-xl border border-[#E5E6F0] bg-[#F8F9FD]">
-      <img
-        src={src}
-        alt={alt}
-        referrerPolicy="no-referrer"
-        onError={() => setFailed(true)}
-        className="h-full w-full object-contain"
-      />
-    </div>
-  );
-}
+type ClientReviewFilter = 'all' | PostApprovalStatus;
 
 export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNavigate }) => {
   const [reviewLink, setReviewLink] = useState<FirebaseReviewLink | null>(null);
@@ -89,6 +43,10 @@ export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNav
   const [reviewerName, setReviewerName] = useState('');
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [busyPostId, setBusyPostId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<ClientReviewFilter>('all');
+  const [confirmApproveAll, setConfirmApproveAll] = useState(false);
+  const [batchApproving, setBatchApproving] = useState(false);
+  const [copiedCaptionPostId, setCopiedCaptionPostId] = useState<string | null>(null);
   const [actionError, setActionError] = useState('');
 
   useEffect(() => {
@@ -101,6 +59,9 @@ export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNav
     setReviewLink(null);
     setReviewerName('');
     setPosts([]);
+    setStatusFilter('all');
+    setConfirmApproveAll(false);
+    setCopiedCaptionPostId(null);
     setActionError('');
 
     const handleInvalidLink = () => {
@@ -202,11 +163,55 @@ export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNav
   const approvedCount = posts.filter((p) => p.status === 'approved').length;
   const changesCount = posts.filter((p) => p.status === 'changes_requested').length;
   const inReviewCount = posts.filter((p) => p.status === 'in_review').length;
+  const remainingUnapproved = posts.filter((p) => p.status !== 'approved');
+  const progressPct = posts.length > 0 ? Math.round((approvedCount / posts.length) * 100) : 0;
+
+  const filteredPosts = useMemo(() => {
+    if (statusFilter === 'all') return posts;
+    return posts.filter((p) => p.status === statusFilter);
+  }, [posts, statusFilter]);
+
+  const handleCopyCaption = async (post: FirebasePost) => {
+    try {
+      await navigator.clipboard.writeText(post.caption);
+      setCopiedCaptionPostId(post.id);
+      window.setTimeout(
+        () => setCopiedCaptionPostId((cur) => (cur === post.id ? null : cur)),
+        2000
+      );
+    } catch {
+      // Ignore clipboard failures
+    }
+  };
+
+  const handleApproveRemaining = async () => {
+    if (!reviewLink || remainingUnapproved.length === 0 || batchApproving) return;
+    setBatchApproving(true);
+    setActionError('');
+    try {
+      const author = reviewerName.trim() || reviewLink.clientName || 'Client';
+      for (const post of remainingUnapproved) {
+        await submitClientPostDecision({
+          reviewLink,
+          postId: post.id,
+          decision: 'approved',
+          authorName: author,
+        });
+      }
+      setConfirmApproveAll(false);
+    } catch {
+      setActionError(
+        'Could not approve all remaining posts. This review link may have been revoked by the creator.'
+      );
+    } finally {
+      setBatchApproving(false);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-[#FAFBFD] text-[#1C1D33]">
+    <div className="min-h-screen bg-[#FAFBFD] text-[#1C1D33] pb-20">
       <header className="border-b border-[#ECEDF4] bg-white">
-        <div className="mx-auto flex h-[68px] max-w-[1100px] items-center justify-between gap-6 px-6">
+        <div className="mx-auto flex h-[68px] max-w-[1160px] items-center justify-between gap-6 px-6">
           <button
             type="button"
             onClick={() => onNavigate('/')}
@@ -220,11 +225,14 @@ export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNav
             />
           </button>
 
-          <span className="text-xs font-medium text-[#6B6E87]">Private client review</span>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#F4F5FA] px-3 py-1 text-xs font-medium text-[#555870]">
+            <ShieldCheck className="h-3.5 w-3.5 text-[#5B42DC]" aria-hidden="true" />
+            Private client review
+          </span>
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1100px] px-6 py-10">
+      <main className="mx-auto max-w-[1160px] px-4 py-8 sm:px-6 sm:py-10">
         {loading ? (
           <div className="rounded-2xl border border-[#E5E6F0] bg-white p-10 text-center text-sm text-[#646780]">
             Loading campaign proof…
@@ -252,44 +260,136 @@ export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNav
             </button>
           </div>
         ) : (
-          <div>
-            <div className="flex flex-col justify-between gap-6 border-b border-[#E5E6F0] pb-7 sm:flex-row sm:items-end">
-              <div>
-                <p className="text-xs font-semibold text-[#5B42DC]">
-                  Client review · {reviewLink.clientName}
-                </p>
-                <h1 className="mt-1.5 text-3xl font-bold tracking-[-0.03em] text-[#1C1D33]">
-                  {reviewLink.campaignName}
-                </h1>
-                <p className="mt-2 font-mono text-xs tabular-nums text-[#5D607A]">
-                  {approvedCount} of {posts.length} approved · {changesCount} changes requested ·{' '}
-                  {inReviewCount} awaiting review
-                </p>
+          <div className="space-y-6">
+            {/* Hero Portal Header Card (Stitch Magic Proof Portal layout in PostProofs palette) */}
+            <section className="rounded-3xl border border-[#E2E4F0] bg-white p-6 sm:p-7">
+              <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-[#5B42DC]">
+                    <span>Client review portal</span>
+                    <span className="text-[#B8BBD0]">·</span>
+                    <span>{reviewLink.clientName}</span>
+                  </div>
+                  <h1 className="mt-1.5 text-3xl font-bold tracking-[-0.03em] text-[#1C1D33]">
+                    {reviewLink.campaignName}
+                  </h1>
+                  <p className="mt-1.5 text-sm text-[#5B5E77]">
+                    {posts.length} post{posts.length === 1 ? '' : 's'} in batch · Review visuals
+                    and captions below, leave notes, or approve with one click.
+                  </p>
+                </div>
+
+                {/* Progress Breakdown + Batch Approve Control */}
+                <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-[#E5E6F0] bg-[#FAFBFD] p-4 sm:flex-nowrap">
+                  <div className="min-w-[165px]">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-lg font-bold tracking-tight text-[#1C1D33]">
+                        {approvedCount}/{posts.length}
+                      </span>
+                      <span className="font-mono text-xs font-semibold text-[#5B42DC]">
+                        {progressPct}% approved
+                      </span>
+                    </div>
+                    <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-[#E5E6F0]">
+                      <div
+                        className="h-full rounded-full bg-[#1E6F4A] transition-all duration-300"
+                        style={{ width: `${progressPct}%` }}
+                      />
+                    </div>
+                    <p className="mt-1.5 font-mono text-[11px] tabular-nums text-[#5D607A]">
+                      {inReviewCount} pending · {changesCount} revision{changesCount === 1 ? '' : 's'}
+                    </p>
+                  </div>
+
+                  {remainingUnapproved.length > 0 && (
+                    <div className="flex items-center gap-2 shrink-0">
+                      {confirmApproveAll ? (
+                        <>
+                          <button
+                            type="button"
+                            disabled={batchApproving}
+                            onClick={() => void handleApproveRemaining()}
+                            className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-[#1E6F4A] px-3.5 text-xs font-semibold text-white hover:bg-[#175739] disabled:opacity-50 cursor-pointer"
+                          >
+                            <CheckCheck className="h-4 w-4" aria-hidden="true" />
+                            {batchApproving
+                              ? 'Approving…'
+                              : `Confirm approve (${remainingUnapproved.length})`}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={batchApproving}
+                            onClick={() => setConfirmApproveAll(false)}
+                            className="inline-flex h-10 items-center rounded-xl border border-[#DCDEEB] bg-white px-3 text-xs font-semibold text-[#474A63] hover:text-[#1C1D33] cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmApproveAll(true)}
+                          className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-[#5B42DC] px-4 text-xs font-semibold text-white transition-colors hover:bg-[#4931C2] cursor-pointer"
+                        >
+                          <CheckCheck className="h-4 w-4" aria-hidden="true" />
+                          Approve remaining ({remainingUnapproved.length})
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div className="w-full sm:w-64">
-                <label
-                  htmlFor="reviewer-name"
-                  className="block text-xs font-semibold text-[#474A63]"
-                >
-                  Reviewing as
-                </label>
-                <input
-                  id="reviewer-name"
-                  type="text"
-                  maxLength={80}
-                  value={reviewerName}
-                  onChange={(e) => setReviewerName(e.target.value)}
-                  placeholder="Your name"
-                  className="mt-1.5 h-10 w-full rounded-xl border border-[#DCDEEB] bg-white px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
-                />
+              {/* Filter Tabs + Reviewer Name Input */}
+              <div className="mt-6 flex flex-col justify-between gap-4 border-t border-[#ECEDF4] pt-5 sm:flex-row sm:items-center">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(
+                    [
+                      ['all', `All posts (${posts.length})`],
+                      ['in_review', `Pending (${inReviewCount})`],
+                      ['approved', `Approved (${approvedCount})`],
+                      ['changes_requested', `Changes (${changesCount})`],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setStatusFilter(key)}
+                      className={`rounded-xl px-3.5 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                        statusFilter === key
+                          ? 'bg-[#5B42DC] text-white'
+                          : 'bg-[#F4F5FA] text-[#555870] hover:bg-[#EAEBF5] hover:text-[#1C1D33]'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2.5 sm:w-72">
+                  <label
+                    htmlFor="reviewer-name"
+                    className="shrink-0 text-xs font-semibold text-[#474A63]"
+                  >
+                    Reviewing as
+                  </label>
+                  <input
+                    id="reviewer-name"
+                    type="text"
+                    maxLength={80}
+                    value={reviewerName}
+                    onChange={(e) => setReviewerName(e.target.value)}
+                    placeholder="Your name"
+                    className="h-9 min-w-0 flex-1 rounded-xl border border-[#DCDEEB] bg-white px-3 text-sm text-[#1C1D33] focus:border-[#5B42DC] focus:outline-none"
+                  />
+                </div>
               </div>
-            </div>
+            </section>
 
             {actionError && (
               <div
                 role="alert"
-                className="mt-6 flex items-center justify-between gap-3 rounded-xl border border-[#F0C8C4] bg-[#FDF4F3] px-4 py-3 text-sm text-[#9B2B22]"
+                className="flex items-center justify-between gap-3 rounded-xl border border-[#F0C8C4] bg-[#FDF4F3] px-4 py-3 text-sm text-[#9B2B22]"
               >
                 <span>{actionError}</span>
                 <button
@@ -304,45 +404,97 @@ export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNav
             )}
 
             {posts.length === 0 ? (
-              <div className="mt-8 rounded-2xl border border-[#E5E6F0] bg-white p-10 text-center text-sm text-[#646780]">
+              <div className="rounded-2xl border border-[#E5E6F0] bg-white p-10 text-center text-sm text-[#646780]">
                 No posts have been added to this campaign yet. Check back soon.
               </div>
+            ) : filteredPosts.length === 0 ? (
+              <div className="rounded-2xl border border-[#E5E6F0] bg-white p-10 text-center">
+                <p className="text-sm font-semibold text-[#1C1D33]">No posts match this filter</p>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('all')}
+                  className="mt-2 text-xs font-semibold text-[#5B42DC] hover:underline cursor-pointer"
+                >
+                  Show all {posts.length} posts
+                </button>
+              </div>
             ) : (
-              <div className="mt-8 space-y-6">
-                {posts.map((post, idx) => {
-                  const isBusy = busyPostId === post.id;
+              <div className="space-y-6">
+                {filteredPosts.map((post, idx) => {
+                  const isBusy = busyPostId === post.id || batchApproving;
                   return (
                     <article
                       key={post.id}
-                      className="grid grid-cols-1 gap-6 rounded-2xl border border-[#E2E4F0] bg-white p-6 lg:grid-cols-12"
+                      id={`review-post-${post.id}`}
+                      className="grid grid-cols-1 gap-6 rounded-3xl border border-[#E2E4F0] bg-white p-5 sm:p-6 lg:grid-cols-12"
                     >
+                      {/* Left Column: Social Channel Proof Mockup + Frame Metadata */}
                       <div className="lg:col-span-5">
-                        <PostPreviewImage src={post.imageUrl} alt={post.title} />
-                        <div className="mt-3 flex items-center justify-between text-xs font-mono tabular-nums text-[#666982]">
+                        <SocialPostMockup
+                          clientName={reviewLink.clientName}
+                          channel={post.channel}
+                          scheduledDate={post.scheduledDate}
+                          title={post.title}
+                          caption={post.caption}
+                          imageUrl={post.imageUrl}
+                          mode="feed"
+                        />
+                        <div className="mt-3 flex items-center justify-between px-1 text-xs font-mono tabular-nums text-[#666982]">
                           <span>
                             {String(idx + 1).padStart(2, '0')} · {post.channel}
                           </span>
-                          <span>{post.scheduledDate}</span>
+                          <span>Scheduled {post.scheduledDate}</span>
                         </div>
                       </div>
 
+                      {/* Right Column: Title, Copy Proof Box, Comment Thread & Sign-off */}
                       <div className="flex flex-col justify-between lg:col-span-7">
                         <div>
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <h2 className="text-xl font-bold tracking-[-0.02em] text-[#1C1D33]">
-                              {post.title}
-                            </h2>
-                            <StatusLabel status={post.status} />
+                            <span className="font-mono text-xs font-semibold text-[#5B42DC]">
+                              {post.channel} · {post.scheduledDate}
+                            </span>
+                            <PostStatusBadge status={post.status} />
                           </div>
 
-                          <p className="mt-3 whitespace-pre-wrap text-[15px] leading-[1.7] text-[#3B3E57]">
-                            {post.caption}
-                          </p>
+                          <h2 className="mt-2 text-2xl font-bold tracking-[-0.02em] text-[#1C1D33]">
+                            {post.title}
+                          </h2>
 
-                          <div className="mt-6 border-t border-[#ECEDF4] pt-4">
+                          {/* Primary Caption Proof Box with Copy action */}
+                          <div className="mt-4 rounded-2xl border border-[#EAEBF4] bg-[#FAFBFD] p-4">
+                            <div className="flex items-center justify-between gap-2 border-b border-[#EAEBF4] pb-2">
+                              <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#6B6E87]">
+                                Primary caption proof
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyCaption(post)}
+                                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold text-[#5B42DC] hover:bg-[#EAE6FF] cursor-pointer"
+                              >
+                                {copiedCaptionPostId === post.id ? (
+                                  <>
+                                    <Check className="h-3 w-3 text-[#1E6F4A]" />
+                                    Copied
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="h-3 w-3" />
+                                    Copy caption
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                            <p className="mt-3 whitespace-pre-wrap text-[15px] leading-[1.7] text-[#3B3E57]">
+                              <HighlightedCaption caption={post.caption} />
+                            </p>
+                          </div>
+
+                          {/* Feedback Thread */}
+                          <div className="mt-5 border-t border-[#ECEDF4] pt-4">
                             <div className="flex items-center gap-1.5 text-xs font-semibold text-[#5E617A]">
                               <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
-                              <span>Feedback ({post.comments.length})</span>
+                              <span>Feedback &amp; revisions ({post.comments.length})</span>
                             </div>
 
                             {post.comments.length > 0 && (
@@ -440,6 +592,31 @@ export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNav
           </div>
         )}
       </main>
+
+      {!loading && !revoked && reviewLink && posts.length > 0 && (
+        <div className="fixed inset-x-4 bottom-4 z-30 mx-auto flex max-w-2xl flex-wrap items-center justify-between gap-3 rounded-2xl bg-[#1C1D33] px-5 py-3 text-white shadow-xl">
+          <div className="flex items-center gap-2.5 text-xs">
+            <span className="inline-block h-2 w-2 rounded-full bg-[#3DD68C]" aria-hidden="true" />
+            <span className="font-semibold">
+              All changes saved live · {approvedCount}/{posts.length} approved
+            </span>
+          </div>
+          {inReviewCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => {
+                setStatusFilter('in_review');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              className="inline-flex h-8 items-center rounded-xl bg-[#5B42DC] px-3 text-xs font-semibold text-white hover:bg-[#4931C2] cursor-pointer"
+            >
+              View {inReviewCount} awaiting review
+            </button>
+          ) : (
+            <span className="font-mono text-[11px] text-white/75">No login required</span>
+          )}
+        </div>
+      )}
     </div>
   );
 };

@@ -3,9 +3,11 @@ import { describe, it } from 'node:test';
 import { resolveSelectedCampaignId, resolveWorkspaceTab } from '../workspaceState.ts';
 
 describe('Workspace tab routing & campaign selection persistence', () => {
-  it('keeps /app, /app/billing, and /app/settings synchronized with workspace tabs', () => {
+  it('keeps /app, /app/pending, /app/billing, and /app/settings synchronized with workspace tabs', () => {
     assert.equal(resolveWorkspaceTab('/app'), 'campaigns');
     assert.equal(resolveWorkspaceTab('/app/'), 'campaigns');
+    assert.equal(resolveWorkspaceTab('/app/pending'), 'pending');
+    assert.equal(resolveWorkspaceTab('/app/pending/'), 'pending');
     assert.equal(resolveWorkspaceTab('/app/billing'), 'billing');
     assert.equal(resolveWorkspaceTab('/app/billing/'), 'billing');
     assert.equal(resolveWorkspaceTab('/app/settings'), 'settings');
