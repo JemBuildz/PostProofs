@@ -54,7 +54,7 @@ import {
 } from './CampaignProofViews';
 import type { CampaignViewMode } from './CampaignProofViews';
 import { PendingApprovalsHub } from './PendingApprovalsHub';
-import { PostProofDetailModal } from './PostProofDetailModal';
+import { PostDetailReviewView } from './PostDetailReviewView';
 import {
   ALLOWED_CHANNELS,
   subscribeCreatorBilling,
@@ -223,6 +223,7 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                   ? '/app/settings'
                   : '/app';
       setMobileNavOpen(false);
+      setInspectedTarget(null);
       onNavigate(target, options);
     },
     [onNavigate]
@@ -1335,7 +1336,33 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
           </div>
         )}
 
-        {activeTab === 'settings' ? (
+        {inspectedCampaign && inspectedTarget ? (
+          <PostDetailReviewView
+            campaign={inspectedCampaign}
+            posts={inspectedPosts}
+            activePostId={inspectedTarget.postId}
+            backLabel={
+              activeTab === 'pending'
+                ? 'Pending Review'
+                : activeTab === 'approved'
+                  ? 'Approved Vault'
+                  : 'Calendar'
+            }
+            onBack={() => setInspectedTarget(null)}
+            onSelectPost={(nextPostId) =>
+              setInspectedTarget({ campaignId: inspectedCampaign.id, postId: nextPostId })
+            }
+            onEditPost={(post) => {
+              setSelectedCampaignId(inspectedCampaign.id);
+              setInspectedTarget(null);
+              openTab('campaigns');
+              setCampaignViewMode('list');
+              startEditingPost(post);
+            }}
+            onUpdatePostStatus={handleUpdatePostStatusForCampaign}
+            onSubmitReply={handleSubmitReplyForCampaign}
+          />
+        ) : activeTab === 'settings' ? (
           <WorkspaceSettings
             user={user}
             billingStatus={billingStatus}
@@ -1351,21 +1378,15 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
             campaigns={campaigns}
             postsByCampaignId={postsByCampaignId}
             searchQuery={campaignSearchQuery}
-            onBackToCalendar={() => openTab('campaigns')}
             onOpenCampaign={(cmpId) => {
               setSelectedCampaignId(cmpId);
               openTab('campaigns');
             }}
-            onCreateNewDraft={() => {
-              if (!activeCampaign) {
-                setShowNewCampaignModal(true);
-              } else {
-                openTab('campaigns');
-                setShowPostForm(true);
-              }
+            onInspectPost={(cmp, post) => {
+              setSelectedCampaignId(cmp.id);
+              setInspectedTarget({ campaignId: cmp.id, postId: post.id });
             }}
             onUpdatePostStatus={handleUpdatePostStatusForCampaign}
-            onSubmitReply={handleSubmitReplyForCampaign}
           />
         ) : activeTab === 'approved' ? (
           <ApprovedVaultView
@@ -2220,6 +2241,9 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
                         setCampaignViewMode('list');
                         startEditingPost(post);
                       }}
+                      onApprovePost={(post) =>
+                        void handleUpdatePostStatusForCampaign(activeCampaign.id, post.id, 'approved')
+                      }
                       onAddPostForDate={(isoDate) => {
                         setPostDate(isoDate);
                         setShowPostForm(true);
@@ -2634,26 +2658,6 @@ export const CreatorWorkspace: React.FC<CreatorWorkspaceProps> = ({
             </form>
           </div>
         </div>
-      )}
-
-      {inspectedCampaign && inspectedTarget && (
-        <PostProofDetailModal
-          campaign={inspectedCampaign}
-          posts={inspectedPosts}
-          activePostId={inspectedTarget.postId}
-          onSelectPost={(nextPostId) =>
-            setInspectedTarget({ campaignId: inspectedCampaign.id, postId: nextPostId })
-          }
-          onClose={() => setInspectedTarget(null)}
-          onEditPost={(post) => {
-            setSelectedCampaignId(inspectedCampaign.id);
-            openTab('campaigns');
-            setCampaignViewMode('list');
-            startEditingPost(post);
-          }}
-          onResetToInReview={handleResetPostForCampaign}
-          onSubmitReply={handleSubmitReplyForCampaign}
-        />
       )}
     </div>
   );

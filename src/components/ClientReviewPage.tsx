@@ -578,35 +578,59 @@ export const ClientReviewPage: React.FC<ClientReviewPageProps> = ({ token, onNav
                           </div>
                         </div>
 
-                        <div className="mt-6 grid grid-cols-1 gap-2.5 border-t border-[#ECEDF4] pt-4 sm:grid-cols-2">
-                          <button
-                            type="button"
-                            disabled={isBusy}
-                            onClick={() => handleDecision(post.id, 'approved')}
-                            className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 ${
-                              post.status === 'approved'
-                                ? 'bg-[#1E6F4A] text-white'
-                                : 'border border-[#C2E3D2] bg-[#EDF8F2] text-[#1E6F4A] hover:bg-[#DEF2E7]'
-                            }`}
-                          >
-                            <Check className="h-4 w-4" aria-hidden="true" />
-                            {post.status === 'approved' ? 'Approved' : 'Approve post'}
-                          </button>
+                        {post.status === 'approved' ? (
+                          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#C2E3D2] bg-[#EDF8F2] p-4 text-xs">
+                            <div className="flex items-center gap-2.5">
+                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#1E6F4A] text-white">
+                                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                              </span>
+                              <div>
+                                <p className="font-bold text-[#144E34]">
+                                  Approved via Magic Review Link
+                                </p>
+                                <p className="text-[11px] text-[#1E6F4A]">
+                                  Signed off on {new Date(post.updatedAt).toLocaleDateString()} · Ready for publishing
+                                </p>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleDecision(post.id, 'changes_requested')}
+                              className="font-semibold text-[#144E34] underline hover:text-[#0E3825] disabled:opacity-50 cursor-pointer"
+                            >
+                              Request changes instead
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="mt-6 grid grid-cols-1 gap-2.5 border-t border-[#ECEDF4] pt-4 sm:grid-cols-2">
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleDecision(post.id, 'approved')}
+                              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#C2E3D2] bg-[#EDF8F2] text-sm font-semibold text-[#1E6F4A] transition-colors hover:bg-[#DEF2E7] whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+                            >
+                              <Check className="h-4 w-4" aria-hidden="true" />
+                              Approve post
+                            </button>
 
-                          <button
-                            type="button"
-                            disabled={isBusy}
-                            onClick={() => handleDecision(post.id, 'changes_requested')}
-                            className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 ${
-                              post.status === 'changes_requested'
-                                ? 'bg-[#9A5B0A] text-white'
-                                : 'border border-[#DCDEEB] bg-white text-[#32344D] hover:border-[#D4B483] hover:text-[#8A5007]'
-                            }`}
-                          >
-                            <RotateCcw className="h-4 w-4" aria-hidden="true" />
-                            Request changes
-                          </button>
-                        </div>
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleDecision(post.id, 'changes_requested')}
+                              className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 ${
+                                post.status === 'changes_requested'
+                                  ? 'bg-[#9A5B0A] text-white'
+                                  : 'border border-[#DCDEEB] bg-white text-[#32344D] hover:border-[#D4B483] hover:text-[#8A5007]'
+                              }`}
+                            >
+                              <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                              {post.status === 'changes_requested'
+                                ? 'Changes requested'
+                                : 'Request changes'}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </article>
                   );

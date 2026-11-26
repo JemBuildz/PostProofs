@@ -172,6 +172,7 @@ export interface WeekGridViewProps {
   readonly linkRevoked: boolean;
   readonly onInspectPost: (post: FirebasePost) => void;
   readonly onEditPost: (post: FirebasePost) => void;
+  readonly onApprovePost?: (post: FirebasePost) => void;
   readonly onAddPostForDate: (isoDate: string) => void;
 }
 
@@ -180,6 +181,7 @@ export const WeekGridView: React.FC<WeekGridViewProps> = ({
   linkRevoked,
   onInspectPost,
   onEditPost,
+  onApprovePost,
   onAddPostForDate,
 }) => {
   const initialMonday = useMemo(() => {
@@ -313,6 +315,17 @@ export const WeekGridView: React.FC<WeekGridViewProps> = ({
                           <Eye className="h-3 w-3" aria-hidden="true" />
                           Inspect
                         </button>
+                        {onApprovePost && post.status !== 'approved' && (
+                          <button
+                            type="button"
+                            onClick={() => onApprovePost(post)}
+                            aria-label={`Approve ${post.title}`}
+                            className="inline-flex h-7 items-center justify-center gap-1 rounded-lg bg-[#EDF8F2] px-2 text-[11px] font-semibold text-[#1E6F4A] hover:bg-[#DEF2E7] cursor-pointer"
+                          >
+                            <Check className="h-3 w-3" aria-hidden="true" />
+                            Approve
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => onEditPost(post)}
